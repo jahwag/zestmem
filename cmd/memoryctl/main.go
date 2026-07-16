@@ -12,10 +12,15 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bytelope/zestmem/internal/buildinfo"
 	"github.com/jackc/pgx/v5"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.String())
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 	}

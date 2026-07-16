@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      go-modules: { patterns: ["*"] }
+    commit-message: { prefix: "build(deps)" }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+    commit-message: { prefix: "ci(deps)" }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      container-bases: { patterns: ["*"] }
+    commit-message: { prefix: "build(deps)" }
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      compose-images: { patterns: ["*"] }
+    commit-message: { prefix: "build(deps)" }

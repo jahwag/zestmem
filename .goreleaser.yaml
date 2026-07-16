@@ -1,0 +1,67 @@
+version: 2
+
+project_name: zestmem
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - &build
+    id: memoryd
+    main: ./cmd/memoryd
+    binary: memoryd
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags: [-trimpath]
+    ldflags:
+      - >-
+        -s -w -buildid=
+        -X github.com/bytelope/zestmem/internal/buildinfo.Version={{.Version}}
+        -X github.com/bytelope/zestmem/internal/buildinfo.Revision={{.FullCommit}}
+        -X github.com/bytelope/zestmem/internal/buildinfo.Date={{.CommitDate}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+  - <<: *build
+    id: memoryctl
+    main: ./cmd/memoryctl
+    binary: memoryctl
+  - <<: *build
+    id: memory-mcp-bridge
+    main: ./cmd/memory-mcp-bridge
+    binary: memory-mcp-bridge
+
+archives:
+  - id: native
+    ids: [memoryd, memoryctl, memory-mcp-bridge]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - LICENSE.md
+      - README.md
+    wrap_in_directory: true
+    builds_info:
+      mtime: '{{ .CommitDate }}'
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  ids: [native]
+
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - '{{ .ArtifactName }}.spdx.json'
+
+changelog:
+  disable: true
+
+release:
+  disable: true
