@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "type": "stdio",
+      "command": "clients/memory-mcp-local.sh",
+      "args": ["claude"]
+    }
+  }
+}

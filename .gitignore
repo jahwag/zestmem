@@ -1,0 +1,9 @@
+.env
+.memory-client.env
+.idea/
+.vscode/
+bin/
+coverage.out
+dist/
+node_modules/
+tmp/

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MEMORY_PROFILE=codex \"$(git rev-parse --show-toplevel)/clients/bootstrap-catalog.sh\"",
+            "timeout": 15,
+            "statusMessage": "Loading bounded durable-memory catalog"
+          }
+        ]
+      }
+    ]
+  }
+}

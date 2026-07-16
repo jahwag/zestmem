@@ -1,0 +1,6 @@
+FROM docker.io/library/postgres:17-bookworm
+COPY ops/backup.sh /usr/local/bin/backup.sh
+COPY ops/restore-test.sh /usr/local/bin/restore-test.sh
+COPY ops/backup-loop.sh /usr/local/bin/backup-loop.sh
+RUN chmod 0755 /usr/local/bin/backup.sh /usr/local/bin/restore-test.sh /usr/local/bin/backup-loop.sh
+CMD ["/usr/local/bin/backup-loop.sh"]

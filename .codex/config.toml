@@ -1,0 +1,4 @@
+[mcp_servers.agent_memory]
+command = "clients/memory-mcp-local.sh"
+args = ["codex"]
+default_tools_approval_mode = "writes"

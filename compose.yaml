@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: memory
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory -d memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    command:
+      - --model-id
+      - BAAI/bge-small-en-v1.5
+      - --revision
+      - 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
+      - --port
+      - "80"
+    volumes:
+      - tei-cache:/data
+
+  memory:
+    build:
+      context: .
+      dockerfile: Containerfile
+    environment:
+      DATABASE_URL: postgres://memory:${POSTGRES_PASSWORD}@postgres:5432/memory
+      TEI_URL: http://tei
+      TEI_CONCURRENCY: "4"
+      RATE_LIMIT_PER_MINUTE: "120"
+      RATE_LIMIT_BURST: "20"
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tei:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/memoryd", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    environment:
+      MEMORY_DOMAIN: ${MEMORY_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - memory
+
+  backup:
+    build:
+      context: .
+      dockerfile: Containerfile.backup
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: memory
+      PGUSER: memory
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - backups:/backups
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  tei-cache:
+  caddy-data:
+  backups:

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-memory": {
+      "type": "remote",
+      "url": "{env:MEMORY_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MEMORY_TOKEN}"
+      }
+    }
+  }
+}
