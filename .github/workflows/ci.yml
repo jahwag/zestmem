@@ -12,67 +12,7 @@ concurrency:
 env:
   CONTAINER_RUNTIME: docker
 jobs:
-  go:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: true }
-      - run: make verify
-  integration:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: true }
-      - run: make integration
-      - run: make backup
-      - run: make load
-  cross-compile:
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
-        exclude: [{ goos: windows, goarch: arm64 }]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: true }
-      - run: go build -trimpath ./cmd/...
-        env: { CGO_ENABLED: '0', GOOS: '${{ matrix.goos }}', GOARCH: '${{ matrix.goarch }}' }
-  snapshot:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { fetch-depth: 0, persist-credentials: false }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: false }
-      - uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
-        with: { distribution: goreleaser, version: v2.12.7, args: release --snapshot --clean }
-  containers:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
-      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with: { context: ., file: Containerfile, platforms: 'linux/amd64,linux/arm64', push: false }
-      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with: { context: ., file: Containerfile.backup, platforms: 'linux/amd64,linux/arm64', push: false }
-  brand:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
-      - run: make brand-verify
-        env: { CONTAINER_RUNTIME: docker }
-  supply-chain-policy:
+  quality:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -86,3 +26,45 @@ jobs:
           annotations: true
       - name: Secret scan
         run: docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854 detect --source /repo --no-banner
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.12', cache: true }
+      - run: make verify
+      - run: make cross-compile
+      - run: make brand-verify
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.12', cache: true }
+      - run: make integration
+      - if: github.event_name != 'pull_request'
+        run: make backup
+      - if: github.event_name != 'pull_request'
+        run: make load
+  snapshot:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.12', cache: false }
+      - uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with: { distribution: goreleaser, version: v2.12.7, args: release --snapshot --clean }
+  containers:
+    runs-on: ubuntu-24.04
+    env:
+      PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { persist-credentials: false }
+      - if: github.event_name != 'pull_request'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with: { context: ., file: Containerfile, platforms: '${{ env.PLATFORMS }}', push: false }
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with: { context: ., file: Containerfile.backup, platforms: '${{ env.PLATFORMS }}', push: false }
