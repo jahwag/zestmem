@@ -5,16 +5,17 @@ SYFT_VERSION := v1.40.0
 CONTAINER_RUNTIME ?= podman
 CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: fmt-check verify cross-compile integration backup load release-snapshot brand-verify release-verify container-build
+.PHONY: fmt-check verify vulncheck cross-compile integration backup load release-snapshot brand-verify release-verify container-build
 fmt-check:
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './dist/*'))"
 
 verify: fmt-check
 	go mod tidy
 	git diff --exit-code -- go.mod go.sum
-	go test ./...
 	go vet ./...
 	go test -race ./...
+
+vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 cross-compile:
