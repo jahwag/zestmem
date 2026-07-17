@@ -43,7 +43,7 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner, agent, space := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	secret := "integration-secret"
+	secret := "am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	digest := sha256.Sum256([]byte(secret))
 	_, err = conn.Exec(ctx, `INSERT INTO principals(id,type,display_name) VALUES($1,'human','owner'),($2,'agent','agent')`, owner, agent)
 	if err == nil {

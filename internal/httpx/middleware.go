@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -21,10 +22,13 @@ type Metrics struct {
 	operationCount    map[string]uint64
 	operationFailures map[string]uint64
 	operationDuration map[string]time.Duration
+	operationBuckets  map[string][]uint64
 	embeddingCount    uint64
 	embeddingFailures uint64
 	embeddingDuration time.Duration
 }
+
+var operationDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 func (m *Metrics) Observe(operation string, duration time.Duration, err error) {
 	m.mu.Lock()
@@ -33,9 +37,18 @@ func (m *Metrics) Observe(operation string, duration time.Duration, err error) {
 		m.operationCount = map[string]uint64{}
 		m.operationFailures = map[string]uint64{}
 		m.operationDuration = map[string]time.Duration{}
+		m.operationBuckets = map[string][]uint64{}
 	}
 	m.operationCount[operation]++
 	m.operationDuration[operation] += duration
+	if m.operationBuckets[operation] == nil {
+		m.operationBuckets[operation] = make([]uint64, len(operationDurationBuckets))
+	}
+	for i, upperBound := range operationDurationBuckets {
+		if duration.Seconds() <= upperBound {
+			m.operationBuckets[operation][i]++
+		}
+	}
 	if err != nil {
 		m.operationFailures[operation]++
 	}
@@ -56,8 +69,21 @@ func (m *Metrics) Handler() http.Handler {
 		fmt.Fprintf(w, "agent_memory_http_requests_total %d\nagent_memory_rate_limited_total %d\nagent_memory_http_failures_total %d\n", m.Requests.Load(), m.Limited.Load(), m.Failures.Load())
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		for op, count := range m.operationCount {
-			fmt.Fprintf(w, "agent_memory_operations_total{operation=%q} %d\nagent_memory_operation_failures_total{operation=%q} %d\nagent_memory_operation_duration_seconds_sum{operation=%q} %.6f\n", op, count, op, m.operationFailures[op], op, m.operationDuration[op].Seconds())
+		operations := make([]string, 0, len(m.operationCount))
+		for operation := range m.operationCount {
+			operations = append(operations, operation)
+		}
+		sort.Strings(operations)
+		for _, op := range operations {
+			count := m.operationCount[op]
+			fmt.Fprintf(w, "agent_memory_operations_total{operation=%q} %d\nagent_memory_operation_failures_total{operation=%q} %d\n", op, count, op, m.operationFailures[op])
+			for i, upperBound := range operationDurationBuckets {
+				fmt.Fprintf(w, "agent_memory_operation_duration_seconds_bucket{operation=%q,le=%q} %d\n",
+					op, strconv.FormatFloat(upperBound, 'f', -1, 64), m.operationBuckets[op][i])
+			}
+			fmt.Fprintf(w, "agent_memory_operation_duration_seconds_bucket{operation=%q,le=\"+Inf\"} %d\n", op, count)
+			fmt.Fprintf(w, "agent_memory_operation_duration_seconds_count{operation=%q} %d\nagent_memory_operation_duration_seconds_sum{operation=%q} %.6f\n",
+				op, count, op, m.operationDuration[op].Seconds())
 		}
 		fmt.Fprintf(w, "agent_memory_embedding_requests_total %d\nagent_memory_embedding_failures_total %d\nagent_memory_embedding_duration_seconds_sum %.6f\n", m.embeddingCount, m.embeddingFailures, m.embeddingDuration.Seconds())
 	})

@@ -1,0 +1,166 @@
+name: Release artifacts
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+jobs:
+  native-a:
+    runs-on: ubuntu-24.04
+    steps: &native_steps
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { ref: '${{ github.event.release.tag_name }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.12', cache: false }
+      - uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with: { distribution: goreleaser, version: v2.12.7, args: release --clean }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: native-a, path: 'dist/*', retention-days: 3 }
+  native-b:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { ref: '${{ github.event.release.tag_name }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.12', cache: false }
+      - uses: anchore/sbom-action/download-syft@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with: { distribution: goreleaser, version: v2.12.7, args: release --clean }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: native-b, path: 'dist/*', retention-days: 3 }
+  verify-native:
+    needs: [native-a, native-b]
+    runs-on: ubuntu-24.04
+    outputs:
+      subjects: ${{ steps.subjects.outputs.value }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: native-a, path: a }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: native-b, path: b }
+      - name: Require byte-identical archive manifests
+        run: diff -u a/checksums.txt b/checksums.txt
+      - id: subjects
+        run: echo "value=$(base64 -w0 a/checksums.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-native
+          path: |
+            a/*.tar.gz
+            a/*.zip
+            a/checksums.txt
+            a/*.spdx.json
+          retention-days: 3
+  provenance:
+    needs: verify-native
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    # Required full version tag: see docs/releasing.md for the verifier-driven exception.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      base64-subjects: ${{ needs.verify-native.outputs.subjects }}
+      upload-assets: true
+      upload-tag-name: ${{ github.event.release.tag_name }}
+      private-repository: true
+  publish-native:
+    needs: [verify-native, provenance]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: verified-native, path: dist }
+      - uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+      - name: Sign release blobs
+        working-directory: dist
+        run: |
+          for artifact in *.tar.gz *.zip checksums.txt; do
+            [ -f "$artifact" ] || continue
+            cosign sign-blob --yes --bundle "${artifact}.bundle" "$artifact"
+          done
+      - name: Upload verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber
+  images:
+    needs: publish-native
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: zestmem
+            file: Containerfile
+          - image: zestmem-backup
+            file: Containerfile.backup
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { ref: '${{ github.event.release.tag_name }}', persist-credentials: false }
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ github.token }}' }
+      - id: vars
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          IMAGE: ghcr.io/bytelope/${{ matrix.image }}
+        run: |
+          version="${TAG#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+          rest="${version#*.}"
+          echo "minor=${version%%.*}.${rest%%.*}" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version }}
+            ${{ steps.vars.outputs.image }}:sha-${{ github.sha }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ github.event.release.published_at }}
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: '${{ steps.vars.outputs.image }}@${{ steps.build.outputs.digest }}'
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+      - name: Sign immutable image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.vars.outputs.image }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+      - name: Promote verified aliases
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.vars.outputs.image }}
+          MAJOR: ${{ steps.vars.outputs.major }}
+          MINOR: ${{ steps.vars.outputs.minor }}
+        run: |
+          source="${IMAGE}@${DIGEST}"
+          docker buildx imagetools create --tag "${IMAGE}:${MAJOR}" "$source"
+          docker buildx imagetools create --tag "${IMAGE}:${MINOR}" "$source"
+          docker buildx imagetools create --tag "${IMAGE}:latest" "$source"

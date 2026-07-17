@@ -67,8 +67,7 @@ func (s *Store) FindExact(ctx context.Context, principalID, spaceID, hash, exclu
 	query := `SELECT ` + memoryColumns + ` FROM memories m JOIN memory_revisions r
  ON r.memory_id=m.id AND r.revision=m.current_revision
  WHERE m.space_id=$2 AND m.content_hash=$3 AND m.status='active' AND ($4='' OR m.id<>$4::uuid)
- AND EXISTS(SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND g.space_id=m.space_id AND s.suspended_at IS NULL
- AND CASE g.role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END>=2)`
+	 AND has_direct_space_role($1,m.space_id,'contributor')`
 	mem, err := scanMemory(s.pool.QueryRow(ctx, query, principalID, spaceID, hash, exclude))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -90,8 +89,7 @@ func (s *Store) FindSimilar(ctx context.Context, principalID, spaceID, text stri
    FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
    LEFT JOIN memory_embeddings e ON e.memory_id=r.memory_id AND e.revision=r.revision
    WHERE m.space_id=$2 AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
-   AND EXISTS(SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND g.space_id=m.space_id AND s.suspended_at IS NULL
-   AND CASE g.role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END>=2)
+	 AND has_direct_space_role($1,m.space_id,'contributor')
  )
  SELECT id::text, title, CASE WHEN length(regexp_replace(body,'\\s+',' ','g'))<=240
    THEN left(regexp_replace(body,'\\s+',' ','g'),greatest(length(regexp_replace(body,'\\s+',' ','g'))-1,0))||'…'
@@ -118,9 +116,7 @@ func (s *Store) Create(ctx context.Context, rec memory.CreateRecord) (memory.Mem
 		tag, err := tx.Exec(ctx, `INSERT INTO memories
  (id,space_id,status,current_revision,content_hash,created_by,created_at)
  SELECT $1,$2,'active',1,$3,$4,$5 WHERE EXISTS(
-   SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id
-   WHERE g.principal_id=$4 AND g.space_id=$2 AND s.suspended_at IS NULL
-   AND CASE g.role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END>=2)`,
+	 SELECT 1 WHERE has_direct_space_role($4,$2,'contributor'))`,
 			rec.NewID, rec.SpaceID, rec.ContentHash, rec.PrincipalID, rec.Now)
 		if err != nil {
 			return memory.Memory{}, mapConflict(err)
@@ -136,17 +132,11 @@ func (s *Store) Create(ctx context.Context, rec memory.CreateRecord) (memory.Mem
 	})
 }
 
-func (s *Store) Get(ctx context.Context, id string) (memory.Memory, error) {
-	return getTx(ctx, s.pool, id)
-}
-
 func (s *Store) ReadAuthorized(ctx context.Context, id string, principal memory.Principal) (memory.Memory, error) {
-	mem, err := scanMemory(s.pool.QueryRow(ctx, `WITH RECURSIVE readable(id) AS (
- SELECT g.space_id FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND s.suspended_at IS NULL
- UNION SELECT child.id FROM spaces child JOIN readable parent ON child.parent_id=parent.id WHERE child.suspended_at IS NULL
-) SELECT `+memoryColumns+` FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
-WHERE m.id=$2 AND ((m.status<>'retracted' AND m.space_id IN(SELECT id FROM readable)) OR
- (m.status='retracted' AND EXISTS(SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND g.space_id=m.space_id AND s.suspended_at IS NULL AND g.role IN('maintainer','owner'))))`, principal.ID, id))
+	mem, err := scanMemory(s.pool.QueryRow(ctx, `SELECT `+memoryColumns+` FROM memories m
+ JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
+ WHERE m.id=$2 AND ((m.status<>'retracted' AND can_read_space($1,m.space_id)) OR
+ (m.status='retracted' AND has_direct_space_role($1,m.space_id,'maintainer')))`, principal.ID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return memory.Memory{}, memory.ErrNotFound
 	}
@@ -158,9 +148,7 @@ func (s *Store) Revise(ctx context.Context, rec memory.ReviseRecord) (memory.Mem
 		next := rec.ExpectedRevision + 1
 		tag, err := tx.Exec(ctx, `UPDATE memories m SET current_revision=$1,content_hash=$2
  WHERE m.id=$3 AND m.current_revision=$4 AND m.status='active' AND EXISTS(
-   SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id
-   WHERE g.principal_id=$5 AND g.space_id=m.space_id AND s.suspended_at IS NULL
-   AND CASE g.role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END>=2)`, next, rec.ContentHash, rec.MemoryID, rec.ExpectedRevision, rec.PrincipalID)
+	 SELECT 1 WHERE has_direct_space_role($5,m.space_id,'contributor'))`, next, rec.ContentHash, rec.MemoryID, rec.ExpectedRevision, rec.PrincipalID)
 		if err != nil {
 			return memory.Memory{}, mapConflict(err)
 		}
@@ -179,9 +167,7 @@ func (s *Store) Retract(ctx context.Context, rec memory.RetractRecord) (memory.M
 	return s.mutate(ctx, "retract", rec.PrincipalID, rec.IdempotencyKey, rec.RequestHash, func(tx pgx.Tx) (memory.Memory, error) {
 		tag, err := tx.Exec(ctx, `UPDATE memories m SET status='retracted',retracted_at=$1
  WHERE m.id=$2 AND m.current_revision=$3 AND m.status='active' AND EXISTS(
-   SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id
-   WHERE g.principal_id=$4 AND g.space_id=m.space_id AND s.suspended_at IS NULL
-   AND CASE g.role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END>=3)`, rec.Now, rec.MemoryID, rec.ExpectedRevision, rec.PrincipalID)
+	 SELECT 1 WHERE has_direct_space_role($4,m.space_id,'maintainer'))`, rec.Now, rec.MemoryID, rec.ExpectedRevision, rec.PrincipalID)
 		if err != nil {
 			return memory.Memory{}, err
 		}
@@ -308,15 +294,12 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) ([]memory.Hit,
 		vector = pgvector.NewVector(q.Embedding)
 	}
 	rows, err := s.pool.Query(ctx, `
- WITH RECURSIVE readable(id) AS (
-   SELECT g.space_id FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$8 AND s.suspended_at IS NULL
-   UNION SELECT child.id FROM spaces child JOIN readable parent ON child.parent_id=parent.id WHERE child.suspended_at IS NULL
- ), eligible AS (
+ WITH eligible AS (
    SELECT m.id,m.space_id,m.current_revision,r.title,r.body,r.kind,r.topics,r.provenance,r.search_document,e.embedding
    FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
    LEFT JOIN memory_embeddings e ON e.memory_id=r.memory_id AND e.revision=r.revision
-   JOIN readable acl ON acl.id=m.space_id
-   WHERE m.space_id=ANY($2::uuid[]) AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
+	 WHERE m.space_id=ANY($2::uuid[]) AND can_read_space($8,m.space_id)
+	   AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
      AND (coalesce(cardinality($3::text[]),0)=0 OR r.kind::text=ANY($3::text[]))
      AND (coalesce(cardinality($4::text[]),0)=0 OR r.topics && $4::text[])
  ), keyword AS (
@@ -363,17 +346,13 @@ func (s *Store) Catalog(ctx context.Context, principalID string, readable []stri
 			claimValues = append(claimValues, value)
 		}
 	}
-	rows, err := s.pool.Query(ctx, `WITH RECURSIVE accessible(id) AS (
- SELECT g.space_id FROM space_grants g JOIN spaces root ON root.id=g.space_id WHERE g.principal_id=$4 AND root.suspended_at IS NULL
- UNION SELECT child.id FROM spaces child JOIN accessible parent ON child.parent_id=parent.id WHERE child.suspended_at IS NULL
-)
- SELECT s.id::text,s.name,s.slug,s.type::text,
+	rows, err := s.pool.Query(ctx, `SELECT s.id::text,s.name,s.slug,s.type::text,
    coalesce((SELECT array_agg(topic ORDER BY count DESC,topic) FROM (
      SELECT topic,count(*) count FROM memories m JOIN memory_revisions r
        ON r.memory_id=m.id AND r.revision=m.current_revision,unnest(r.topics) topic
      WHERE m.space_id=s.id AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now()) GROUP BY topic ORDER BY count DESC,topic LIMIT 6
    ) popular),'{}'::text[]) topics
- FROM spaces s JOIN accessible acl ON acl.id=s.id WHERE s.id=ANY($1::uuid[]) AND s.suspended_at IS NULL
+	 FROM spaces s WHERE s.id=ANY($1::uuid[]) AND can_read_space($4,s.id) AND s.suspended_at IS NULL
  ORDER BY EXISTS(SELECT 1 FROM workspace_bindings wb
    WHERE wb.project_space_id=s.id AND (wb.claim_kind,wb.normalized_value) IN
 	   (SELECT * FROM unnest($2::text[],$3::text[]))) DESC,s.name,s.id`, readable, claimKinds, claimValues, principalID)

@@ -1,6 +1,10 @@
-# ZestMem
+<p align="center">
+  <img src="assets/brand/readme/zestmem-header.png" alt="ZestMem" width="720">
+</p>
 
-Self-hosted, context-bounded durable memory for autonomous agent teams. It exposes one authenticated Streamable HTTP MCP endpoint for Codex, Claude Code, and OpenCode. It never captures transcripts: agents can only write through explicit mutation tools carrying a reason and idempotency key.
+Distributed, context-bounded memory for autonomous agent teams.
+
+ZestMem is a self-hosted durable-memory service. It exposes one authenticated Streamable HTTP MCP endpoint for Codex, Claude Code, and OpenCode. It never captures transcripts: agents can only write through explicit mutation tools carrying a reason and idempotency key.
 
 ## What M1 includes
 
@@ -26,16 +30,16 @@ podman compose up --build -d
 
 The application also binds `http://127.0.0.1:8080/mcp` for loopback-only development. The external MCP URL is `https://localhost/mcp` by default when Caddy is running. Caddy uses a local CA for localhost; production should set `MEMORY_DOMAIN` to a DNS name and allow Caddy to obtain a public certificate.
 
-Initialize the first operator and organization from the app image:
+Download `memoryctl` for your platform from the matching GitHub release, then initialize the first operator and organization:
 
 ```sh
-podman compose run --rm --entrypoint /usr/local/bin/memoryctl memory \
-  bootstrap --name "Operator" --org "Consultant Dev" --slug consultant-dev
+DATABASE_URL='postgres://...' memoryctl bootstrap \
+  --name "Operator" --org "Consultant Dev" --slug consultant-dev
 ```
 
 `memoryctl` also provides `create-principal`, `create-space`, `grant`, `bind-workspace`, `issue-key`, and `revoke-key`. Run a command with `-h` for its flags. Key issuance prints the secret once; put it in the agent's secret store, never in repository configuration.
 
-Migrations under `migrations/` initialize a new volume. For an existing deployment, apply new numbered migrations in order before starting the corresponding application release.
+`memoryd` embeds and applies numbered migrations under `migrations/` before opening the service. Applied files are checksummed in `schema_migrations`, concurrent starters serialize through a PostgreSQL advisory lock, and an existing complete M1 schema is adopted automatically. Never edit an applied migration; add the next numbered file instead.
 
 ## Entra workload identity
 

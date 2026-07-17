@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bytelope/zestmem/internal/authn"
+	"github.com/bytelope/zestmem/internal/buildinfo"
 	"github.com/bytelope/zestmem/internal/embed"
 	"github.com/bytelope/zestmem/internal/httpx"
 	"github.com/bytelope/zestmem/internal/mcpserver"
@@ -21,6 +23,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.String())
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--healthcheck" {
 		resp, err := http.Get("http://127.0.0.1:8080/readyz")
 		if err != nil || resp.StatusCode != http.StatusNoContent {

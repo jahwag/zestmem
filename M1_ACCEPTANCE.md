@@ -6,7 +6,7 @@
 - Disposable pgvector integration: create/retry/dedup/revise/retract, exact vector plus full-text recall, direct grants, descendant read inheritance, cross-Space isolation, retracted exclusion, revoked/expired keys, disabled Principals, and all six tools through the official Go MCP Streamable HTTP client.
 - Mutation-context test: neither successful writes nor exact-duplicate errors return a full body.
 - Context-budget acceptance: serialized `catalog` content is capped at 800 bytes and serialized `recall` content at 2,000 bytes. Counting every UTF-8 byte as a token is a conservative hard bound, and full bodies remain available only by explicit `read_memory` ID.
-- Load acceptance: 10 isolated Agent Principals, 10 Spaces, 10,000 fingerprinted Memories/embeddings, and 100 concurrent hybrid recalls. The post-feedback verification run completed in 1.890 seconds with no cross-Space hit.
+- Load acceptance: 10 isolated Agent Principals, 10 Spaces, 10,000 fingerprinted Memories/embeddings, and 100 hybrid recalls from 10 concurrent agents. The post-ACL-refactor verification run completed in 1.60 seconds with 72.14 ms p95, 80.76 ms maximum latency, and no cross-Space hit.
 - Backup acceptance: a custom-format dump containing a representative Memory, revision, grant, and embedding was restored into a fresh uniquely named database and passed structural/data checks before promotion.
 - Both application and backup OCI images build with Podman; Compose configuration renders successfully.
 - `govulncheck` reports no reachable vulnerabilities after upgrading pgx, go-jose, and x/net; the race-enabled Go suite also passes.

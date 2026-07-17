@@ -34,16 +34,12 @@ type Repository interface {
 	FindExact(context.Context, string, string, string, string) (*Memory, error)
 	FindSimilar(context.Context, string, string, string, []float32, int) ([]DuplicateCandidate, error)
 	Create(context.Context, CreateRecord) (Memory, error)
-	Get(context.Context, string) (Memory, error)
+	ReadAuthorized(context.Context, string, Principal) (Memory, error)
 	Revise(context.Context, ReviseRecord) (Memory, error)
 	Retract(context.Context, RetractRecord) (Memory, error)
 	Recall(context.Context, RecallQuery) ([]Hit, error)
 	Catalog(context.Context, string, []string, []WorkspaceClaim) ([]CatalogEntry, error)
 	ResolveWorkspace(context.Context, []WorkspaceClaim) ([]string, error)
-}
-
-type authorizedReader interface {
-	ReadAuthorized(context.Context, string, Principal) (Memory, error)
 }
 
 type CreateRecord struct {
@@ -236,12 +232,9 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	}
 	hash := contentHash(cmd.Title, cmd.Body, cmd.Kind)
 	reqHash := requestHash("revise", cmd.MemoryID, fmt.Sprint(cmd.ExpectedRevision), hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
-	current, err := s.repo.Get(ctx, cmd.MemoryID)
+	current, err := s.repo.ReadAuthorized(ctx, cmd.MemoryID, cmd.Principal)
 	if err != nil {
 		return MutationResult{}, err
-	}
-	if err := s.auth.Require(ctx, cmd.Principal, current.SpaceID, ActionRead); err != nil {
-		return MutationResult{}, ErrNotFound
 	}
 	if err := s.auth.Require(ctx, cmd.Principal, current.SpaceID, ActionRevise); err != nil {
 		return MutationResult{}, err
@@ -285,12 +278,9 @@ func (s *Service) Retract(ctx context.Context, cmd RetractCommand) (MutationResu
 	if cmd.MemoryID == "" || cmd.ExpectedRevision < 1 || strings.TrimSpace(cmd.Reason) == "" || cmd.IdempotencyKey == "" {
 		return MutationResult{}, fmt.Errorf("%w: memory_id, expected_revision, reason, and idempotency_key are required", ErrInvalidInput)
 	}
-	current, err := s.repo.Get(ctx, cmd.MemoryID)
+	current, err := s.repo.ReadAuthorized(ctx, cmd.MemoryID, cmd.Principal)
 	if err != nil {
 		return MutationResult{}, err
-	}
-	if err := s.auth.Require(ctx, cmd.Principal, current.SpaceID, ActionRead); err != nil {
-		return MutationResult{}, ErrNotFound
 	}
 	if err := s.auth.Require(ctx, cmd.Principal, current.SpaceID, ActionRetract); err != nil {
 		return MutationResult{}, err
@@ -325,21 +315,7 @@ func replayed(result MutationResult) MutationResult {
 }
 
 func (s *Service) Read(ctx context.Context, principal Principal, memoryID string) (Memory, error) {
-	if reader, ok := s.repo.(authorizedReader); ok {
-		return reader.ReadAuthorized(ctx, memoryID, principal)
-	}
-	mem, err := s.repo.Get(ctx, memoryID)
-	if err != nil {
-		return Memory{}, err
-	}
-	action := ActionRead
-	if mem.Status == StatusRetracted {
-		action = ActionRetract
-	}
-	if err := s.auth.Require(ctx, principal, mem.SpaceID, action); err != nil {
-		return Memory{}, ErrNotFound
-	}
-	return mem, nil
+	return s.repo.ReadAuthorized(ctx, memoryID, principal)
 }
 
 func (s *Service) Catalog(ctx context.Context, principal Principal, claims []WorkspaceClaim, cursor ...string) (CatalogResult, error) {

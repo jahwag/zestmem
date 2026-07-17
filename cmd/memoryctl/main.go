@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,10 +10,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bytelope/zestmem/internal/authn"
+	"github.com/bytelope/zestmem/internal/buildinfo"
 	"github.com/jackc/pgx/v5"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.String())
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 	}
@@ -154,10 +158,8 @@ func issueKey(ctx context.Context, conn *pgx.Conn, args []string) {
 	principal := fs.String("principal", "", "agent Principal UUID")
 	by := fs.String("by", "", "issuing Principal UUID")
 	fs.Parse(args)
-	raw := make([]byte, 32)
-	_, err := rand.Read(raw)
+	secret, err := authn.GenerateAPIKey()
 	fatal(err)
-	secret := "am_" + base64.RawURLEncoding.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(secret))
 	prefix := secret[:11]
 	tx, err := conn.Begin(ctx)

@@ -130,6 +130,8 @@ Package coordinates, monorepo detectors, and ecosystem-specific metadata are def
 
 Use BAAI/bge-small-en-v1.5 as the initial English embedding model through one shared TEI process. Persist provider, immutable model revision, dimensions, normalization, and query/document prefixes. Mixed active fingerprints are prohibited; controlled re-embedding enables later model replacement. Use exact vector search until traces demonstrate an ANN requirement.
 
+Promote HNSW only after exact search is isolated as the bottleneck: either two consecutive cdev-class benchmark runs with 10,000 active embeddings in the queried Space show database-backed recall p95 above 250 ms, or production recall p95 remains above 500 ms for 15 minutes and tracing attributes at least half of that latency to the PostgreSQL vector scan. Record corpus size, `EXPLAIN (ANALYZE, BUFFERS)`, recall-quality comparison, and rollback evidence before enabling the index.
+
 ### M1.3 Client delivery and operations
 
 - Expose one standards-compliant remote Streamable HTTP MCP endpoint usable by Codex, Claude Code, and OpenCode.

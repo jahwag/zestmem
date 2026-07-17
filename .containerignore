@@ -1,0 +1,10 @@
+.git
+.github
+.env
+.memory-client.env
+.idea
+.vscode
+.tools
+dist
+tmp
+coverage.out

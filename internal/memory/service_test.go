@@ -328,8 +328,8 @@ func validRemember() RememberCommand {
 }
 
 func testService() (*Service, *fakeRepo, *fakeAuth) {
-	repo := &fakeRepo{memories: map[string]Memory{}, idempotency: map[string]MutationResult{}, requestHashes: map[string]string{}}
 	auth := &fakeAuth{spaces: []string{"project"}}
+	repo := &fakeRepo{memories: map[string]Memory{}, idempotency: map[string]MutationResult{}, requestHashes: map[string]string{}, auth: auth}
 	svc := NewService(repo, auth)
 	svc.now = func() time.Time { return time.Unix(100, 0).UTC() }
 	svc.id = func() string { return "memory-1" }
@@ -359,6 +359,7 @@ type fakeRepo struct {
 	similar       []DuplicateCandidate
 	catalog       []CatalogEntry
 	hits          []Hit
+	auth          Authorizer
 }
 
 func (r *fakeRepo) idemKey(principal, op, key string) string { return principal + "/" + op + "/" + key }
@@ -398,9 +399,16 @@ func (r *fakeRepo) Create(_ context.Context, rec CreateRecord) (Memory, error) {
 	return mem, nil
 }
 
-func (r *fakeRepo) Get(_ context.Context, id string) (Memory, error) {
+func (r *fakeRepo) ReadAuthorized(ctx context.Context, id string, principal Principal) (Memory, error) {
 	mem, ok := r.memories[id]
 	if !ok {
+		return Memory{}, ErrNotFound
+	}
+	action := ActionRead
+	if mem.Status == StatusRetracted {
+		action = ActionRetract
+	}
+	if err := r.auth.Require(ctx, principal, mem.SpaceID, action); err != nil {
 		return Memory{}, ErrNotFound
 	}
 	return mem, nil

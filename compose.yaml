@@ -1,13 +1,12 @@
 services:
   postgres:
-    image: docker.io/pgvector/pgvector:pg17
+    image: docker.io/pgvector/pgvector:pg17@sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0 # pg17
     environment:
       POSTGRES_DB: memory
       POSTGRES_USER: memory
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U memory -d memory"]
       interval: 5s
@@ -15,7 +14,7 @@ services:
       retries: 20
 
   tei:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c # cpu-1.8
     command:
       - --model-id
       - BAAI/bge-small-en-v1.5
@@ -52,7 +51,7 @@ services:
       retries: 30
 
   caddy:
-    image: docker.io/library/caddy:2-alpine
+    image: docker.io/library/caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d # 2.10.2-alpine
     environment:
       MEMORY_DOMAIN: ${MEMORY_DOMAIN:-localhost}
     ports:

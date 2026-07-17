@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,13 +21,42 @@ import (
 func TestAPIKeyAuthenticationUsesDigest(t *testing.T) {
 	lookup := &fakeLookup{principal: memory.Principal{ID: "agent", Type: "agent"}}
 	auth := NewAPIKeyOnly(lookup)
-	got, err := auth.Authenticate(context.Background(), "secret")
+	secret := APIKeyPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	got, err := auth.Authenticate(context.Background(), secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := sha256.Sum256([]byte("secret"))
+	want := sha256.Sum256([]byte(secret))
 	if string(lookup.digest) != string(want[:]) || got.ID != "agent" {
 		t.Fatalf("digest=%x principal=%#v", lookup.digest, got)
+	}
+}
+
+func TestGeneratedAPIKeysHaveOneAcceptedDotFreeFormat(t *testing.T) {
+	for range 100 {
+		secret, err := GenerateAPIKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(secret, ".") || !isAPIKey(secret) {
+			t.Fatalf("invalid generated key format %q", secret)
+		}
+	}
+	for _, malformed := range []string{"secret", "am_short", "am_header.payload.signature"} {
+		if isAPIKey(malformed) {
+			t.Fatalf("accepted malformed API key %q", malformed)
+		}
+	}
+}
+
+func TestAPIKeyOnlyRejectsCredentialsOutsideIssuedFormat(t *testing.T) {
+	lookup := &fakeLookup{}
+	auth := NewAPIKeyOnly(lookup)
+	if _, err := auth.Authenticate(context.Background(), "header.payload.signature"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("error=%v, want ErrUnauthenticated", err)
+	}
+	if lookup.digest != nil {
+		t.Fatal("malformed credential reached API key lookup")
 	}
 }
 

@@ -58,6 +58,16 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	verifyMigrations, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrationCount int
+	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
+	verifyMigrations.Close(ctx)
+	if err != nil || migrationCount != 2 {
+		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
+	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
 	cmd := memory.RememberCommand{Principal: memory.Principal{ID: agent}, SpaceID: project, Title: "Connection pool", Body: "Use a maximum of twenty database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Reason: "operational limit", IdempotencyKey: "create-1"}
 	created, err := svc.Remember(ctx, cmd)

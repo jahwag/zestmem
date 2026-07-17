@@ -45,15 +45,18 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (memory.
 	if token == "" {
 		return memory.Principal{}, ErrUnauthenticated
 	}
-	if a.verifier != nil && strings.Count(token, ".") == 2 {
+	if isAPIKey(token) {
+		digest := sha256.Sum256([]byte(token))
+		return a.lookup.ByAPIKeyDigest(ctx, digest[:])
+	}
+	if a.verifier != nil {
 		idToken, err := a.verifier.Verify(ctx, token)
 		if err != nil {
 			return memory.Principal{}, ErrUnauthenticated
 		}
 		return a.lookup.ByExternalIdentity(ctx, a.issuer, idToken.Subject)
 	}
-	digest := sha256.Sum256([]byte(token))
-	return a.lookup.ByAPIKeyDigest(ctx, digest[:])
+	return memory.Principal{}, ErrUnauthenticated
 }
 
 type contextKey struct{}

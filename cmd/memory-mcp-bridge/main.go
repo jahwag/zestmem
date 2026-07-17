@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/bytelope/zestmem/internal/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
 )
@@ -41,13 +43,17 @@ func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.String())
+		return
+	}
 	ctx := context.Background()
 	endpoint := required("MEMORY_MCP_URL")
 	httpClient, err := authenticatedClient(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	remoteClient := mcp.NewClient(&mcp.Implementation{Name: "agent-memory-bridge", Version: "0.1.0"}, nil)
+	remoteClient := mcp.NewClient(&mcp.Implementation{Name: "agent-memory-bridge", Version: buildinfo.Version}, nil)
 	remote, err := remoteClient.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -57,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	local := mcp.NewServer(&mcp.Implementation{Name: "agent-memory-bridge", Version: "0.1.0"}, nil)
+	local := mcp.NewServer(&mcp.Implementation{Name: "agent-memory-bridge", Version: buildinfo.Version}, nil)
 	for _, tool := range listed.Tools {
 		tool := tool
 		name := tool.Name
