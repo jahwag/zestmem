@@ -19,26 +19,38 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { persist-credentials: false }
+        with: { fetch-depth: 0, persist-credentials: false }
       - uses: zizmorcore/zizmor-action@135698455da5c3b3e55f73f4419e481ab68cdd95 # v0.4.1
         with:
           advanced-security: false
           annotations: true
       - name: Secret scan
         run: docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854 detect --source /repo --no-banner
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version: '1.25.12', cache: false }
-      # Job-scoped cache: the shared setup-go key (go.sum only) gets claimed by
-      # whichever job saves first, leaving cross-compile cold on every run.
+      # Jobs with the same platform, toolchain, and go.sum share setup-go's key;
+      # a thinner job can save first and leave quality's builds cold.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: go-quality-${{ hashFiles('go.sum') }}
-          restore-keys: go-quality-
+          key: go-quality-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-quality-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.setup-go.outputs.go-version }}-
       - run: make verify
-      - if: github.event_name != 'pull_request'
+      - name: Detect dependency changes
+        if: github.event_name == 'pull_request'
+        id: dependency-changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- go.mod go.sum; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - if: github.event_name != 'pull_request' || steps.dependency-changes.outputs.changed == 'true'
         run: make vulncheck
       - run: make cross-compile
       - run: make brand-verify
