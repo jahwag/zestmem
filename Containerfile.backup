@@ -1,4 +1,4 @@
-FROM docker.io/library/postgres:17.7-bookworm@sha256:86e0b703649d7a792bd9243ee28afc9d8f7c6b2b5638077c9d6882d4d472bbfd
+FROM docker.io/library/postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
