@@ -24,10 +24,16 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 if [ -n "$remote" ]; then
-  curl --fail --silent --show-error --max-time 10 --get \
+  catalog="$(curl --fail --silent --show-error --max-time 10 --get \
     --header "Authorization: Bearer ${MEMORY_TOKEN}" --data-urlencode "git_remote=${remote}" \
-    "${base}/bootstrap/catalog" || true
+    "${base}/bootstrap/catalog" || true)"
 else
-  curl --fail --silent --show-error --max-time 10 \
-    --header "Authorization: Bearer ${MEMORY_TOKEN}" "${base}/bootstrap/catalog" || true
+  catalog="$(curl --fail --silent --show-error --max-time 10 \
+    --header "Authorization: Bearer ${MEMORY_TOKEN}" "${base}/bootstrap/catalog" || true)"
+fi
+
+if [ -n "$catalog" ]; then
+  # A bare JSON object is interpreted as hook-control output. Prefix the
+  # catalog so SessionStart clients treat it as additional plain-text context.
+  printf 'ZestMem durable-memory catalog (JSON):\n%s\n' "$catalog"
 fi

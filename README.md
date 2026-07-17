@@ -39,7 +39,7 @@ DATABASE_URL='postgres://...' memoryctl bootstrap \
 
 `memoryctl` also provides `create-principal`, `create-space`, `grant`, `bind-workspace`, `issue-key`, and `revoke-key`. Run a command with `-h` for its flags. Key issuance prints the secret once; put it in the agent's secret store, never in repository configuration.
 
-Migrations under `migrations/` initialize a new volume. For an existing deployment, apply new numbered migrations in order before starting the corresponding application release.
+`memoryd` embeds and applies numbered migrations under `migrations/` before opening the service. Applied files are checksummed in `schema_migrations`, concurrent starters serialize through a PostgreSQL advisory lock, and an existing complete M1 schema is adopted automatically. Never edit an applied migration; add the next numbered file instead.
 
 ## Entra workload identity
 

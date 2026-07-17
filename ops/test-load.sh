@@ -14,4 +14,4 @@ cleanup
 until "$runtime" exec "$name" pg_isready -U postgres -d memory >/dev/null 2>&1; do sleep 1; done
 "$runtime" exec --interactive "$name" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/001_init.sql >/dev/null
 RUN_LOAD_TEST=1 TEST_DATABASE_URL="postgres://postgres:test@localhost:${port}/memory?sslmode=disable" \
-  go test ./internal/postgres -run TestTenAgentsTenThousandMemories -count=1 -timeout=2m
+  go test -v ./internal/postgres -run TestTenAgentsTenThousandMemories -count=1 -timeout=2m

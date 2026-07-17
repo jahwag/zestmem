@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -58,13 +59,16 @@ INSERT INTO memory_embeddings(memory_id,revision,embedding,provider,model,model_
 	start := time.Now()
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, 10)
+	durations := make(chan time.Duration, 100)
 	for agent := 1; agent <= 10; agent++ {
 		agent := agent
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 10; i++ {
+				started := time.Now()
 				hits, err := svc.Recall(ctx, memory.RecallQuery{Principal: memory.Principal{ID: deterministicUUID("load-agent", agent)}, Query: "database setting", Limit: 6})
+				durations <- time.Since(started)
 				if err != nil {
 					errorsCh <- err
 					return
@@ -85,11 +89,20 @@ INSERT INTO memory_embeddings(memory_id,revision,embedding,provider,model,model_
 	}
 	wg.Wait()
 	close(errorsCh)
+	close(durations)
 	for err := range errorsCh {
 		t.Error(err)
 	}
 	if elapsed := time.Since(start); elapsed > 30*time.Second {
 		t.Errorf("100 concurrent recalls took %s", elapsed)
+	}
+	var observed []time.Duration
+	for duration := range durations {
+		observed = append(observed, duration)
+	}
+	sort.Slice(observed, func(i, j int) bool { return observed[i] < observed[j] })
+	if len(observed) == 100 {
+		t.Logf("recall latency p95=%s max=%s", observed[94], observed[len(observed)-1])
 	}
 }
 

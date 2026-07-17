@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/bytelope/zestmem/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,6 +21,10 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		return nil, err
 	}
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if err := migrations.Apply(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -79,13 +84,7 @@ func (s *Store) ByAPIKeyDigest(ctx context.Context, digest []byte) (memory.Princ
 func (s *Store) Require(ctx context.Context, principal memory.Principal, spaceID string, action memory.Action) error {
 	var allowed bool
 	if action == memory.ActionRead {
-		err := s.pool.QueryRow(ctx,
-			"WITH RECURSIVE readable(id) AS ("+
-				" SELECT g.space_id FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND s.suspended_at IS NULL"+
-				" UNION SELECT child.id FROM spaces child JOIN readable parent ON child.parent_id=parent.id WHERE child.suspended_at IS NULL"+
-				") SELECT EXISTS(SELECT 1 FROM readable WHERE id=$2::uuid)",
-			principal.ID, spaceID,
-		).Scan(&allowed)
+		err := s.pool.QueryRow(ctx, `SELECT can_read_space($1,$2)`, principal.ID, spaceID).Scan(&allowed)
 		if err != nil {
 			return err
 		}
@@ -94,12 +93,8 @@ func (s *Store) Require(ctx context.Context, principal memory.Principal, spaceID
 		if action == memory.ActionRetract {
 			minimum = "maintainer"
 		}
-		err := s.pool.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND g.space_id=$2 AND s.suspended_at IS NULL AND "+
-				"CASE role WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END >= "+
-				"CASE $3 WHEN 'reader' THEN 1 WHEN 'contributor' THEN 2 WHEN 'maintainer' THEN 3 WHEN 'owner' THEN 4 END)",
-			principal.ID, spaceID, minimum,
-		).Scan(&allowed)
+		err := s.pool.QueryRow(ctx, `SELECT has_direct_space_role($1,$2,$3::space_role)`,
+			principal.ID, spaceID, minimum).Scan(&allowed)
 		if err != nil {
 			return err
 		}
@@ -111,13 +106,7 @@ func (s *Store) Require(ctx context.Context, principal memory.Principal, spaceID
 }
 
 func (s *Store) ReadableSpaces(ctx context.Context, principal memory.Principal) ([]string, error) {
-	rows, err := s.pool.Query(ctx,
-		"WITH RECURSIVE readable(id) AS ("+
-			" SELECT g.space_id FROM space_grants g JOIN spaces s ON s.id=g.space_id WHERE g.principal_id=$1 AND s.suspended_at IS NULL"+
-			" UNION SELECT child.id FROM spaces child JOIN readable parent ON child.parent_id=parent.id WHERE child.suspended_at IS NULL"+
-			") SELECT DISTINCT id::text FROM readable ORDER BY id::text",
-		principal.ID,
-	)
+	rows, err := s.pool.Query(ctx, `SELECT space_id::text FROM readable_space_ids($1) ORDER BY space_id::text`, principal.ID)
 	if err != nil {
 		return nil, err
 	}
