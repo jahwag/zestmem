@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/Bytelope/zestmem/compare/v0.1.1...v0.1.2) (2026-07-18)
+
+
+### Bug Fixes
+
+* harden backup release image ([#21](https://github.com/Bytelope/zestmem/issues/21)) ([05ecd94](https://github.com/Bytelope/zestmem/commit/05ecd94d155a5ae0fd94922136337168ae699102))
+
 ## [0.1.1](https://github.com/Bytelope/zestmem/compare/v0.1.0...v0.1.1) (2026-07-18)
 
 
