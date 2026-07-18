@@ -26,9 +26,7 @@ services:
       - tei-cache:/data
 
   memory:
-    build:
-      context: .
-      dockerfile: Containerfile
+    image: ghcr.io/bytelope/zestmem:0.1
     environment:
       DATABASE_URL: postgres://memory:${POSTGRES_PASSWORD}@postgres:5432/memory
       TEI_URL: http://tei
@@ -64,9 +62,7 @@ services:
       - memory
 
   backup:
-    build:
-      context: .
-      dockerfile: Containerfile.backup
+    image: ghcr.io/bytelope/zestmem-backup:0.1
     environment:
       PGHOST: postgres
       PGPORT: "5432"
