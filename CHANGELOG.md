@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Bytelope/zestmem/compare/v0.2.0...v0.2.1) (2026-07-18)
+
+
+### Bug Fixes
+
+* make the local memory bridge cwd-independent ([#27](https://github.com/Bytelope/zestmem/issues/27)) ([9f9bd67](https://github.com/Bytelope/zestmem/commit/9f9bd67b2ea4a1d4d8c751312d84b80800ae9070))
+
 ## [0.2.0](https://github.com/Bytelope/zestmem/compare/v0.1.2...v0.2.0) (2026-07-18)
 
 
