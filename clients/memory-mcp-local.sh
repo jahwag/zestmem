@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-root="$(git rev-parse --show-toplevel)"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 set -a
 . "$root/.memory-client.env"
 set +a
