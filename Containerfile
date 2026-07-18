@@ -22,4 +22,5 @@ LABEL org.opencontainers.image.title="ZestMem" \
 COPY --from=build /out/memoryd /usr/local/bin/memoryd
 USER nonroot:nonroot
 EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=5s --retries=30 CMD ["/usr/local/bin/memoryd", "--healthcheck"]
 ENTRYPOINT ["/usr/local/bin/memoryd"]
