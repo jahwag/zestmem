@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/Bytelope/zestmem/compare/v0.1.2...v0.2.0) (2026-07-18)
+
+
+### Features
+
+* deploy release images by default ([#23](https://github.com/Bytelope/zestmem/issues/23)) ([34b1ed8](https://github.com/Bytelope/zestmem/commit/34b1ed8d3729ecaba58a9b7ab01feeca0d177b50))
+
+
+### Bug Fixes
+
+* embed the server healthcheck in its image ([#24](https://github.com/Bytelope/zestmem/issues/24)) ([3dc30f3](https://github.com/Bytelope/zestmem/commit/3dc30f34abbaf7d94cb928630fefe39b1acb5ce0))
+* follow the pre-1.x release alias ([#25](https://github.com/Bytelope/zestmem/issues/25)) ([83c10c4](https://github.com/Bytelope/zestmem/commit/83c10c45da8ec99e26dec56cdbd866daba64603b))
+
 ## [0.1.2](https://github.com/Bytelope/zestmem/compare/v0.1.1...v0.1.2) (2026-07-18)
 
 
