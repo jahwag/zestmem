@@ -1,12 +1,5 @@
 # Changelog
 
-## [0.1.1](https://github.com/Bytelope/zestmem/compare/v0.1.0...v0.1.1) (2026-07-18)
-
-
-### Bug Fixes
-
-* update release image security baseline ([#17](https://github.com/Bytelope/zestmem/issues/17)) ([45e71a1](https://github.com/Bytelope/zestmem/commit/45e71a13965dec70bb1713db669fbec0176e1c34))
-
 ## 0.1.0 (2026-07-17)
 
 
