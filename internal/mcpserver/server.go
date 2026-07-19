@@ -24,12 +24,20 @@ type Observer interface {
 	Observe(string, time.Duration, error)
 }
 
+const usageInstructions = `Use ZestMem as durable project memory, not as a transcript store.
+
+For substantial repository work, first call catalog and recall with task-specific terms to find relevant architecture decisions, conventions, prior bugs, constraints, and unfinished work. Skip memory lookup for trivial edits, general questions, and unrelated system administration. After context loss, call catalog again. Recall returns compact candidates; use read_memory for the full body of relevant hits.
+
+After substantial work, proactively remember durable, verified knowledge likely to help future agents: accepted architectural decisions, stable conventions, non-obvious verified constraints, and reusable root-cause findings. Check for related memories and revise or deduplicate rather than creating conflicts. Keep memories concise, scoped, and supported by repository or tool evidence.
+
+Never store transcripts, chat summaries, secrets, credentials, personal data, speculation, temporary task state, routine command output, or facts obvious from the repository. Do not write merely because a task completed. Explicit user requests to remember or forget take precedence.`
+
 func New(domain *memory.Service, observers ...Observer) *Server {
 	s := &Server{domain: domain}
 	if len(observers) > 0 {
 		s.observer = observers[0]
 	}
-	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "agent-memory", Version: "0.1.0"}, nil)
+	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "agent-memory", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: usageInstructions})
 	s.register()
 	return s
 }
@@ -107,7 +115,7 @@ type retractInput struct {
 }
 
 func (s *Server) register() {
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "catalog", Description: "Return a bounded map of accessible Spaces and Topics; call before task work and after context loss.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "catalog", Description: "Return a bounded map of accessible Spaces and Topics. Call before substantial repository work and after context loss; skip for trivial or unrelated tasks.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in catalogInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
@@ -118,7 +126,7 @@ func (s *Server) register() {
 			s.observed("catalog", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "recall", Description: "Search durable memory with explicit task-specific terms; returns compact hits without bodies.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "recall", Description: "Before substantial repository work, search durable memory with task-specific terms for relevant decisions, conventions, prior bugs, constraints, and unfinished work. Returns compact hits without bodies.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in recallInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
@@ -140,7 +148,7 @@ func (s *Server) register() {
 			s.observed("read_memory", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "remember", Description: "Explicitly write durable knowledge to the required target_space_id; checks duplicates first and never captures transcripts.", Annotations: mutationAnnotations(false)},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "remember", Description: "Proactively preserve concise, verified project knowledge likely to help future work, such as accepted decisions, stable conventions, non-obvious constraints, and reusable root causes. Checks duplicates first. Never store transcripts, secrets, personal data, speculation, temporary state, routine output, or obvious repository facts.", Annotations: mutationAnnotations(false)},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in rememberInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
