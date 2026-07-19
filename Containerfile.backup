@@ -8,9 +8,10 @@ LABEL org.opencontainers.image.title="ZestMem Backup" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.source="https://github.com/bytelope/zestmem" \
       org.opencontainers.image.licenses="LicenseRef-Proprietary"
-RUN rm /usr/local/bin/gosu
+RUN rm /usr/local/bin/gosu && apt-get update && apt-get install -y --no-install-recommends age ca-certificates curl jq && rm -rf /var/lib/apt/lists/*
 COPY ops/backup.sh /usr/local/bin/backup.sh
 COPY ops/restore-test.sh /usr/local/bin/restore-test.sh
 COPY ops/backup-loop.sh /usr/local/bin/backup-loop.sh
-RUN chmod 0755 /usr/local/bin/backup.sh /usr/local/bin/restore-test.sh /usr/local/bin/backup-loop.sh
+COPY ops/github-upload.sh /usr/local/bin/github-upload.sh
+RUN chmod 0755 /usr/local/bin/backup.sh /usr/local/bin/restore-test.sh /usr/local/bin/backup-loop.sh /usr/local/bin/github-upload.sh
 CMD ["/usr/local/bin/backup-loop.sh"]

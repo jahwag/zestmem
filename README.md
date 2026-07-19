@@ -14,7 +14,7 @@ ZestMem is a self-hosted durable-memory service. It exposes one authenticated St
 - Direct Space grants, read inheritance to descendants, optimistic revisions, soft retraction, duplicate advice, and retry idempotency.
 - Entra-compatible issuer/audience JWT validation plus revocable, SHA-256-digested opaque keys as a migration fallback.
 - Pinned BGE-small embeddings through a bounded shared TEI service.
-- Caddy TLS, per-Principal rate limits, health/readiness/metrics, nightly custom-format backups, and a real restore/count test.
+- Caddy TLS, per-Principal rate limits, health/readiness/metrics, a read-only browser console, nightly custom-format backups, and a real restore/count test.
 
 The phased scope and decisions are in [PLAN.md](PLAN.md). Domain terminology is in [CONTEXT.md](CONTEXT.md), and executed evidence is recorded in [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md).
 
@@ -58,6 +58,20 @@ Existing Entra user-account agents can migrate individually. Until then, issue e
 
 See [clients/README.md](clients/README.md). Portable project guidance is primary. Codex and Claude hooks call the same bounded catalog endpoint as a progressive enhancement; MCP itself works when a hook is unsupported, untrusted, or disabled.
 
+## Browser console
+
+Open `https://MEMORY_DOMAIN/console/`, or tunnel a loopback-only deployment:
+
+```sh
+ssh -N -L 18080:127.0.0.1:8080 memory-host
+```
+
+Then open `http://127.0.0.1:18080/console/`. Enter a dedicated ZestMem key whose Principal has only Reader grants for the Spaces you need. The console is read-only and uses the same authorization checks as MCP. The credential is held only in page memory: it is not put in a URL, cookie, local storage, or session storage. Recalled bodies are rendered as text rather than HTML.
+
+## Backups
+
+The backup container creates a PostgreSQL custom-format dump nightly at 02:17 UTC and restores it into a fresh temporary database before marking it healthy. For host-loss protection, it can age-encrypt each verified dump and upload it as a GitHub release asset in a separate private repository. See [Encrypted GitHub backups](docs/github-backups.md) for setup, retention, monitoring, and restore drills.
+
 ## Verification
 
 ```sh
@@ -72,4 +86,4 @@ podman compose --env-file .env.example config
 
 The integration script starts a disposable pgvector database and verifies durable create/retry/dedup/revise/retract behavior, ACL isolation/inheritance, hybrid recall, and an actual MCP Streamable HTTP handshake listing and calling the tools.
 
-Backups run at 02:17 UTC. Each dump is restored into a fresh database and table counts for Memories, revisions, grants, and embeddings must match before the dump is reported healthy. Run one immediately with `podman compose exec backup /usr/local/bin/backup.sh`.
+Run one immediately with `podman compose exec backup /usr/local/bin/backup.sh`.
