@@ -65,7 +65,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 2 {
+	if err != nil || migrationCount != 3 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
@@ -96,6 +96,34 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	}
 	if len(hits) != 1 || hits[0].MemoryID != created.Memory.ID {
 		t.Fatalf("hits=%#v", hits)
+	}
+	second, err := svc.Remember(ctx, memory.RememberCommand{
+		Principal: cmd.Principal, SpaceID: project, Title: "Deployment channel", Body: "Use the stable release channel.",
+		Kind: memory.KindFact, Topics: []string{"release"}, Reason: "document deployment", IdempotencyKey: "create-2", DuplicateResolution: "create_distinct",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browsed, err := svc.BrowsePage(ctx, memory.BrowseQuery{
+		Principal: cmd.Principal, SpaceIDs: []string{project}, Kinds: []memory.Kind{memory.KindDirective},
+		Topics: []string{"postgres"}, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(browsed.Items) != 1 || browsed.Items[0].MemoryID != created.Memory.ID || browsed.Items[0].UpdatedAt.IsZero() {
+		t.Fatalf("browse=%#v", browsed)
+	}
+	firstPage, err := svc.BrowsePage(ctx, memory.BrowseQuery{Principal: cmd.Principal, SpaceIDs: []string{project}, Limit: 1})
+	if err != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == "" {
+		t.Fatalf("first browse page=%#v err=%v", firstPage, err)
+	}
+	secondPage, err := svc.BrowsePage(ctx, memory.BrowseQuery{Principal: cmd.Principal, SpaceIDs: []string{project}, Limit: 1, Cursor: firstPage.NextCursor})
+	if err != nil || len(secondPage.Items) != 1 || secondPage.NextCursor != "" || secondPage.Items[0].MemoryID == firstPage.Items[0].MemoryID {
+		t.Fatalf("second browse page=%#v err=%v", secondPage, err)
+	}
+	if firstPage.Items[0].MemoryID != second.Memory.ID && secondPage.Items[0].MemoryID != second.Memory.ID {
+		t.Fatal("second memory missing from browse pages")
 	}
 	_, err = svc.Read(ctx, memory.Principal{ID: other}, created.Memory.ID)
 	if err != nil {
@@ -181,7 +209,9 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 0 {
-		t.Fatalf("retracted memory returned: %#v", hits)
+	for _, hit := range hits {
+		if hit.MemoryID == created.Memory.ID {
+			t.Fatalf("retracted memory returned: %#v", hits)
+		}
 	}
 }

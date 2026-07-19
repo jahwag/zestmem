@@ -284,6 +284,49 @@ func mapConflict(err error) error {
 	return err
 }
 
+func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) ([]memory.BrowseItem, error) {
+	kinds := make([]string, len(q.Kinds))
+	for i := range q.Kinds {
+		kinds[i] = string(q.Kinds[i])
+	}
+	var beforeUpdatedAt, beforeMemoryID any
+	if q.BeforeUpdatedAt != nil {
+		beforeUpdatedAt = *q.BeforeUpdatedAt
+		beforeMemoryID = q.BeforeMemoryID
+	}
+	rows, err := s.pool.Query(ctx, `
+ SELECT m.id::text,m.space_id::text,r.title,r.kind::text,r.topics,
+   CASE WHEN length(regexp_replace(r.body,'\\s+',' ','g'))>280
+     THEN left(regexp_replace(r.body,'\\s+',' ','g'),279)||'…'
+     ELSE regexp_replace(r.body,'\\s+',' ','g') END,
+   m.current_revision,r.created_at
+ FROM memories m JOIN memory_revisions r
+   ON r.memory_id=m.id AND r.revision=m.current_revision
+ WHERE m.space_id=ANY($1::uuid[]) AND can_read_space($4,m.space_id)
+   AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
+   AND (coalesce(cardinality($2::text[]),0)=0 OR r.kind::text=ANY($2::text[]))
+   AND (coalesce(cardinality($3::text[]),0)=0 OR r.topics && $3::text[])
+   AND ($5::timestamptz IS NULL OR (r.created_at,m.id) < ($5::timestamptz,$6::uuid))
+ ORDER BY r.created_at DESC,m.id DESC LIMIT $7`,
+		q.SpaceIDs, kinds, q.Topics, q.Principal.ID, beforeUpdatedAt, beforeMemoryID, q.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []memory.BrowseItem
+	for rows.Next() {
+		var item memory.BrowseItem
+		var kind string
+		if err := rows.Scan(&item.MemoryID, &item.SpaceID, &item.Title, &kind, &item.Topics,
+			&item.Excerpt, &item.Revision, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Kind = memory.Kind(kind)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) ([]memory.Hit, error) {
 	kinds := make([]string, len(q.Kinds))
 	for i := range q.Kinds {

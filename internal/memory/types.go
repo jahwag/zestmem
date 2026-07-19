@@ -128,6 +128,35 @@ type RecallResult struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
+// BrowseItem is the compact representation used by the human-facing memory
+// browser. Unlike a recall Hit it is ordered by recency rather than relevance.
+type BrowseItem struct {
+	MemoryID  string    `json:"memory_id"`
+	SpaceID   string    `json:"space_id"`
+	Title     string    `json:"title"`
+	Kind      Kind      `json:"kind"`
+	Topics    []string  `json:"topics,omitempty"`
+	Excerpt   string    `json:"excerpt"`
+	Revision  int       `json:"revision"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type BrowseResult struct {
+	Items      []BrowseItem `json:"items"`
+	NextCursor string       `json:"next_cursor,omitempty"`
+}
+
+type BrowseQuery struct {
+	SpaceIDs        []string
+	Kinds           []Kind
+	Topics          []string
+	Limit           int
+	Principal       Principal
+	Cursor          string
+	BeforeUpdatedAt *time.Time
+	BeforeMemoryID  string
+}
+
 type RecallQuery struct {
 	Query           string
 	SpaceIDs        []string

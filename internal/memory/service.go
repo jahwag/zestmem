@@ -37,6 +37,7 @@ type Repository interface {
 	ReadAuthorized(context.Context, string, Principal) (Memory, error)
 	Revise(context.Context, ReviseRecord) (Memory, error)
 	Retract(context.Context, RetractRecord) (Memory, error)
+	Browse(context.Context, BrowseQuery) ([]BrowseItem, error)
 	Recall(context.Context, RecallQuery) ([]Hit, error)
 	Catalog(context.Context, string, []string, []WorkspaceClaim) ([]CatalogEntry, error)
 	ResolveWorkspace(context.Context, []WorkspaceClaim) ([]string, error)
@@ -377,6 +378,63 @@ func (s *Service) Recall(ctx context.Context, query RecallQuery) ([]Hit, error) 
 	return result.Hits, err
 }
 
+func (s *Service) BrowsePage(ctx context.Context, query BrowseQuery) (BrowseResult, error) {
+	query.Topics = normalizeTopics(query.Topics)
+	if len(query.SpaceIDs) > 100 || len(query.Topics) > 32 || len(query.Kinds) > 6 {
+		return BrowseResult{}, fmt.Errorf("%w: browse filters exceed limits", ErrInvalidInput)
+	}
+	if err := validateMetadata(query.Topics, nil); err != nil {
+		return BrowseResult{}, err
+	}
+	for _, kind := range query.Kinds {
+		if !kind.Valid() {
+			return BrowseResult{}, fmt.Errorf("%w: invalid memory kind", ErrInvalidInput)
+		}
+	}
+	if query.Limit == 0 {
+		query.Limit = 20
+	}
+	if query.Limit < 1 || query.Limit > 50 {
+		return BrowseResult{}, fmt.Errorf("%w: limit must be between 1 and 50", ErrInvalidInput)
+	}
+	requested := query.Limit
+	cursorKind := "browse-" + requestHash(fmt.Sprint(query.SpaceIDs), fmt.Sprint(query.Kinds), fmt.Sprint(query.Topics), fmt.Sprint(requested))[:12]
+	if query.Cursor != "" {
+		updatedAt, memoryID, err := decodeBrowseCursor(cursorKind, query.Cursor)
+		if err != nil {
+			return BrowseResult{}, err
+		}
+		query.BeforeUpdatedAt = &updatedAt
+		query.BeforeMemoryID = memoryID
+	}
+	readable, err := s.auth.ReadableSpaces(ctx, query.Principal)
+	if err != nil {
+		return BrowseResult{}, err
+	}
+	if len(query.SpaceIDs) > 0 {
+		query.SpaceIDs = intersectSpaces(query.SpaceIDs, readable)
+	} else {
+		query.SpaceIDs = readable
+	}
+	if len(query.SpaceIDs) == 0 {
+		return BrowseResult{}, nil
+	}
+	query.Limit = requested + 1
+	items, err := s.repo.Browse(ctx, query)
+	if err != nil {
+		return BrowseResult{}, err
+	}
+	more := len(items) > requested
+	if more {
+		items = items[:requested]
+	}
+	result := BrowseResult{Items: items}
+	if more {
+		result.NextCursor = encodeBrowseCursor(cursorKind, items[len(items)-1])
+	}
+	return result, nil
+}
+
 func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResult, error) {
 	query.Query = strings.TrimSpace(query.Query)
 	query.Topics = normalizeTopics(query.Topics)
@@ -475,6 +533,32 @@ func decodeCursor(kind, cursor string) (int, error) {
 		return 0, fmt.Errorf("%w: invalid cursor", ErrInvalidInput)
 	}
 	return offset, nil
+}
+
+type browseCursor struct {
+	Kind      string `json:"kind"`
+	UpdatedAt int64  `json:"updated_at"`
+	MemoryID  string `json:"memory_id"`
+}
+
+func encodeBrowseCursor(kind string, item BrowseItem) string {
+	raw, _ := json.Marshal(browseCursor{Kind: kind, UpdatedAt: item.UpdatedAt.UnixNano(), MemoryID: item.MemoryID})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeBrowseCursor(kind, cursor string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: invalid browse cursor", ErrInvalidInput)
+	}
+	var value browseCursor
+	if err := json.Unmarshal(raw, &value); err != nil || value.Kind != kind || value.UpdatedAt <= 0 {
+		return time.Time{}, "", fmt.Errorf("%w: invalid browse cursor", ErrInvalidInput)
+	}
+	if _, err := uuid.Parse(value.MemoryID); err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: invalid browse cursor", ErrInvalidInput)
+	}
+	return time.Unix(0, value.UpdatedAt).UTC(), value.MemoryID, nil
 }
 
 func withinTokenBudget(value any, budget int) bool {
