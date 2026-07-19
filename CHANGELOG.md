@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Bytelope/zestmem/compare/v0.4.0...v0.5.0) (2026-07-19)
+
+
+### Features
+
+* add secure console and offsite backups ([#34](https://github.com/Bytelope/zestmem/issues/34)) ([2d57ecd](https://github.com/Bytelope/zestmem/commit/2d57ecd7c77e002b3668bf631435e44ae4ea85ee))
+
 ## [0.4.0](https://github.com/Bytelope/zestmem/compare/v0.3.0...v0.4.0) (2026-07-19)
 
 
