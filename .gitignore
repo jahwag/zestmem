@@ -6,5 +6,7 @@ bin/
 coverage.out
 dist/
 node_modules/
+test-results/
+node_modules/
 tmp/
 .tools/

@@ -2,88 +2,83 @@
   <img src="assets/brand/readme/zestmem-header.png" alt="ZestMem" width="720">
 </p>
 
-Distributed, context-bounded memory for autonomous agent teams.
+ZestMem is self-hosted, durable memory for teams of autonomous agents. Codex, Claude Code, and OpenCode share useful decisions, facts, lessons, and procedures through one authenticated Streamable HTTP MCP endpoint—without capturing transcripts.
 
-ZestMem is a self-hosted durable-memory service. It exposes one authenticated Streamable HTTP MCP endpoint for Codex, Claude Code, and OpenCode. It never captures transcripts: agents can only write through explicit mutation tools carrying a reason and idempotency key.
+## What it provides
 
-## What M1 includes
+- Hybrid full-text and vector recall, plus a read-only browser for exploring memories by Space, topic, and kind.
+- Explicit, reason-carrying writes; immutable revisions; optimistic concurrency; duplicate advice; and retry idempotency.
+- Hierarchical Spaces with Reader, Contributor, Maintainer, and Owner grants.
+- OIDC workload identity or individually revocable API keys.
+- PostgreSQL 17 with pgvector as the sole system of record, pinned BGE-small embeddings, metrics, verified backups, and signed release artifacts.
 
-- PostgreSQL 17 with pgvector as the sole system of record.
-- Hybrid full-text/exact-vector recall with reciprocal-rank fusion.
-- Six tools: `catalog`, `recall`, `read_memory`, `remember`, `revise_memory`, and `retract_memory`.
-- Direct Space grants, read inheritance to descendants, optimistic revisions, soft retraction, duplicate advice, and retry idempotency.
-- Entra-compatible issuer/audience JWT validation plus revocable, SHA-256-digested opaque keys as a migration fallback.
-- Pinned BGE-small embeddings through a bounded shared TEI service.
-- Caddy TLS, per-Principal rate limits, health/readiness/metrics, a read-only browser console, nightly custom-format backups, and a real restore/count test.
+## Quick start
 
-The phased scope and decisions are in [PLAN.md](PLAN.md). Domain terminology is in [CONTEXT.md](CONTEXT.md), and executed evidence is recorded in [M1_ACCEPTANCE.md](M1_ACCEPTANCE.md).
-
-## Start locally
-
-Requirements are Go 1.25 and Podman Compose or Docker Compose.
+The included Compose file runs published ZestMem images. It requires Podman Compose or Docker Compose.
 
 ```sh
 cp .env.example .env
-# Replace every placeholder in .env. Leave both OIDC values blank for API-key-only development.
-podman compose up --build -d
+chmod 600 .env
+# Set a long random POSTGRES_PASSWORD and MEMORY_DOMAIN=localhost.
+# Clear both OIDC values for API-key-only development.
+podman compose pull
+podman compose up -d
 ```
 
-The application also binds `http://127.0.0.1:8080/mcp` for loopback-only development. The external MCP URL is `https://localhost/mcp` by default when Caddy is running. Caddy uses a local CA for localhost; production should set `MEMORY_DOMAIN` to a DNS name and allow Caddy to obtain a public certificate.
+Run `podman compose run --rm memory --version`, then download the matching `memoryctl` from [ZestMem releases](https://github.com/Bytelope/zestmem/releases) and follow [release verification](docs/verifying-releases.md).
 
-Download `memoryctl` for your platform from the matching GitHub release, then initialize the first operator and organization:
+Compose binds the memory API to `127.0.0.1:8080` and PostgreSQL administration to `127.0.0.1:15432`. Bootstrap the first operator and organization using the password from `.env`:
 
 ```sh
-DATABASE_URL='postgres://...' memoryctl bootstrap \
-  --name "Operator" --org "Consultant Dev" --slug consultant-dev
+PGPASSWORD='the POSTGRES_PASSWORD from .env' \
+  DATABASE_URL='postgres://memory@127.0.0.1:15432/memory?sslmode=disable' \
+  memoryctl bootstrap --name "Operator" --org "Example Organization" --slug example
 ```
 
-`memoryctl` also provides `create-principal`, `create-space`, `grant`, `bind-workspace`, `issue-key`, and `revoke-key`. Run a command with `-h` for its flags. Key issuance prints the secret once; put it in the agent's secret store, never in repository configuration.
+Use `memoryctl` to create Principals and Spaces, grant access, bind workspaces, and issue or revoke keys (`memoryctl <command> -h`). Key secrets are printed once; keep them in the agent's secret store, not repository configuration. See [client setup](clients/README.md) for Codex, Claude Code, and OpenCode examples.
 
-`memoryd` embeds and applies numbered migrations under `migrations/` before opening the service. Applied files are checksummed in `schema_migrations`, concurrent starters serialize through a PostgreSQL advisory lock, and an existing complete M1 schema is adopted automatically. Never edit an applied migration; add the next numbered file instead.
+The loopback MCP endpoint is `http://127.0.0.1:8080/mcp`. Caddy serves `https://localhost/mcp` when `MEMORY_DOMAIN=localhost`, using a local CA that clients must trust.
 
-## Entra workload identity
+## Browse memories
 
-Register the memory API with an Application ID URI/audience and configure:
+Open `http://127.0.0.1:8080/console/`. Enter an API key issued to a dedicated Principal with only Reader grants for the Spaces it needs, or a current short-lived OIDC access token.
+
+The console browses newest memories, filters by Space/topic/kind, searches by relevance, and shows the current revision's provenance and reason. It is read-only and applies the same authorization checks as MCP. The credential lives only in page memory and memory bodies are rendered as text, never HTML.
+
+For a remote loopback-only deployment:
+
+```sh
+ssh -N -L 18080:127.0.0.1:8080 memory-host
+# Then open http://127.0.0.1:18080/console/
+```
+
+## Authentication
+
+For OIDC workload identity, set both values:
 
 ```text
 OIDC_ISSUER=https://login.microsoftonline.com/TENANT_ID/v2.0
 OIDC_AUDIENCE=api://MEMORY_API_APP_ID
 ```
 
-Create one service principal/workload identity per stable agent and grant it access to the memory API. Seed its Entra token `sub` as the Principal's `external_subject` and the exact issuer as `external_issuer`. Agents use client credentials, a certificate, managed identity, or workload federation to acquire a short-lived access token for the MCP request. Token expiry is routine: acquire another token; there is no interactive OAuth session or refresh-session ceremony.
+Create a local Principal with the token's exact `iss` and `sub`, then grant that Principal to the required Spaces. Give each stable agent its own service principal or fallback key; do not share credentials. ZestMem stores only SHA-256 API-key digests and supports immediate revocation.
 
-Existing Entra user-account agents can migrate individually. Until then, issue each one a distinct fallback key. Do not use ROPC to make user accounts headless; it conflicts with MFA and Conditional Access.
+## Operate and verify
 
-## Client bootstrap
+`memoryd` applies checksummed, numbered migrations at startup. Never edit an applied migration; add the next numbered file. Each backup is restored into a temporary database and checked for required tables, current-revision integrity, and 384-dimensional embeddings before it is reported successful. Optional age-encrypted offsite backups are documented in [docs/github-backups.md](docs/github-backups.md).
 
-See [clients/README.md](clients/README.md). Portable project guidance is primary. Codex and Claude hooks call the same bounded catalog endpoint as a progressive enhancement; MCP itself works when a hook is unsupported, untrusted, or disabled.
+Operational endpoints (`/healthz`, `/readyz`, and `/metrics`) should be restricted at the proxy or firewall when they are not intended to be public.
 
-## Browser console
-
-Open `https://MEMORY_DOMAIN/console/`, or tunnel a loopback-only deployment:
+Source verification requires Go 1.25 and Node.js 22:
 
 ```sh
-ssh -N -L 18080:127.0.0.1:8080 memory-host
+make verify
+npm ci && npx playwright install --with-deps chromium firefox webkit && npm run test:e2e
+make integration
+make backup
+make load
 ```
 
-Then open `http://127.0.0.1:18080/console/`. Enter a dedicated ZestMem key whose Principal has only Reader grants for the Spaces you need. The console is read-only and uses the same authorization checks as MCP. The credential is held only in page memory: it is not put in a URL, cookie, local storage, or session storage. Recalled bodies are rendered as text rather than HTML.
+Architecture and domain decisions live in [PLAN.md](PLAN.md) and [CONTEXT.md](CONTEXT.md). See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute, [SECURITY.md](SECURITY.md) to report a vulnerability, and [docs/releasing.md](docs/releasing.md) for the release process.
 
-## Backups
-
-The backup container creates a PostgreSQL custom-format dump nightly at 02:17 UTC and restores it into a fresh temporary database before marking it healthy. For host-loss protection, it can age-encrypt each verified dump and upload it as a GitHub release asset in a separate private repository. See [Encrypted GitHub backups](docs/github-backups.md) for setup, retention, monitoring, and restore drills.
-
-## Verification
-
-```sh
-go test ./...
-go vet ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-sh ops/test-integration.sh
-sh ops/test-backup.sh
-sh ops/test-load.sh
-podman compose --env-file .env.example config
-```
-
-The integration script starts a disposable pgvector database and verifies durable create/retry/dedup/revise/retract behavior, ACL isolation/inheritance, hybrid recall, and an actual MCP Streamable HTTP handshake listing and calling the tools.
-
-Run one immediately with `podman compose exec backup /usr/local/bin/backup.sh`.
+ZestMem is proprietary software. See [LICENSE.md](LICENSE.md).

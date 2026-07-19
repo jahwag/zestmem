@@ -76,6 +76,59 @@ func TestRecallCursorPagesStableRankedHits(t *testing.T) {
 	}
 }
 
+func TestBrowseCursorPagesAndFiltersAreAuthorizationBound(t *testing.T) {
+	svc, repo, auth := testService()
+	auth.spaces = []string{"project", "other-readable"}
+	repo.browse = []BrowseItem{
+		{MemoryID: "10000000-0000-0000-0000-000000000001", SpaceID: "project", Title: "Newest", Kind: KindDecision, UpdatedAt: time.Unix(300, 0)},
+		{MemoryID: "10000000-0000-0000-0000-000000000002", SpaceID: "project", Title: "Next", Kind: KindDecision, UpdatedAt: time.Unix(200, 0)},
+		{MemoryID: "10000000-0000-0000-0000-000000000003", SpaceID: "project", Title: "Oldest", Kind: KindDecision, UpdatedAt: time.Unix(100, 0)},
+	}
+	first, err := svc.BrowsePage(context.Background(), BrowseQuery{
+		Principal: Principal{ID: "agent"}, SpaceIDs: []string{"project", "not-readable"},
+		Kinds: []Kind{KindDecision}, Topics: []string{" Architecture "}, Limit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == "" || repo.browseQuery.SpaceIDs[0] != "project" || len(repo.browseQuery.SpaceIDs) != 1 {
+		t.Fatalf("first=%#v query=%#v", first, repo.browseQuery)
+	}
+	if len(repo.browseQuery.Topics) != 1 || repo.browseQuery.Topics[0] != "architecture" {
+		t.Fatalf("topics=%#v", repo.browseQuery.Topics)
+	}
+	second, err := svc.BrowsePage(context.Background(), BrowseQuery{
+		Principal: Principal{ID: "agent"}, SpaceIDs: []string{"project", "not-readable"},
+		Kinds: []Kind{KindDecision}, Topics: []string{"architecture"}, Limit: 2, Cursor: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].MemoryID != "10000000-0000-0000-0000-000000000003" || second.NextCursor != "" {
+		t.Fatalf("second=%#v", second)
+	}
+	_, err = svc.BrowsePage(context.Background(), BrowseQuery{
+		Principal: Principal{ID: "agent"}, SpaceIDs: []string{"project"}, Kinds: []Kind{KindFact}, Limit: 2, Cursor: first.NextCursor,
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("cursor reused with changed filters: %v", err)
+	}
+}
+
+func TestBrowseFailsClosedWithoutReadableSpaces(t *testing.T) {
+	svc, repo, auth := testService()
+	auth.spaces = nil
+	result, err := svc.BrowsePage(context.Background(), BrowseQuery{Principal: Principal{ID: "agent"}})
+	if err != nil || len(result.Items) != 0 || repo.browseCalls != 0 {
+		t.Fatalf("result=%#v err=%v calls=%d", result, err, repo.browseCalls)
+	}
+	auth.spaces = []string{"readable"}
+	result, err = svc.BrowsePage(context.Background(), BrowseQuery{Principal: Principal{ID: "agent"}, SpaceIDs: []string{"forbidden"}})
+	if err != nil || len(result.Items) != 0 || repo.browseCalls != 0 {
+		t.Fatalf("result=%#v err=%v calls=%d", result, err, repo.browseCalls)
+	}
+}
+
 func TestEscapingCannotCreateAnEmptyOrOverBudgetPage(t *testing.T) {
 	svc, repo, _ := testService()
 	repo.hits = []Hit{{MemoryID: "m", SpaceID: "project", Title: strings.Repeat("\"", 512), Excerpt: strings.Repeat("\\", 400), Topics: []string{strings.Repeat("!", 2000)}}}
@@ -359,6 +412,9 @@ type fakeRepo struct {
 	similar       []DuplicateCandidate
 	catalog       []CatalogEntry
 	hits          []Hit
+	browse        []BrowseItem
+	browseQuery   BrowseQuery
+	browseCalls   int
 	auth          Authorizer
 }
 
@@ -441,6 +497,64 @@ func (r *fakeRepo) Retract(_ context.Context, rec RetractRecord) (Memory, error)
 	r.idempotency[r.idemKey(rec.PrincipalID, "retract", rec.IdempotencyKey)] = result
 	r.requestHashes[r.idemKey(rec.PrincipalID, "retract", rec.IdempotencyKey)] = rec.RequestHash
 	return mem, nil
+}
+
+func (r *fakeRepo) Browse(_ context.Context, q BrowseQuery) ([]BrowseItem, error) {
+	r.browseCalls++
+	r.browseQuery = q
+	if r.browse != nil {
+		start := 0
+		if q.BeforeMemoryID != "" {
+			for i := range r.browse {
+				if r.browse[i].MemoryID == q.BeforeMemoryID {
+					start = i + 1
+					break
+				}
+			}
+		}
+		if start >= len(r.browse) {
+			return nil, nil
+		}
+		end := min(len(r.browse), start+q.Limit)
+		return r.browse[start:end], nil
+	}
+	var items []BrowseItem
+	for _, mem := range r.memories {
+		if mem.Status != StatusActive || (len(q.SpaceIDs) > 0 && !contains(q.SpaceIDs, mem.SpaceID)) {
+			continue
+		}
+		if len(q.Kinds) > 0 && !containsKind(q.Kinds, mem.CurrentRevision.Kind) {
+			continue
+		}
+		items = append(items, BrowseItem{
+			MemoryID: mem.ID, SpaceID: mem.SpaceID, Title: mem.CurrentRevision.Title,
+			Kind: mem.CurrentRevision.Kind, Topics: mem.CurrentRevision.Topics,
+			Excerpt: excerpt(mem.CurrentRevision.Body, 240), Revision: mem.CurrentRevision.Number,
+			UpdatedAt: mem.CurrentRevision.CreatedAt,
+		})
+	}
+	if len(items) > q.Limit {
+		items = items[:q.Limit]
+	}
+	return items, nil
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func containsKind(values []Kind, value Kind) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *fakeRepo) Recall(_ context.Context, q RecallQuery) ([]Hit, error) {

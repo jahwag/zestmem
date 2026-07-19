@@ -3,42 +3,97 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ZestMem Console</title>
+  <meta name="color-scheme" content="dark">
+  <title>ZestMem · Memory browser</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header>
-    <div><span class="mark">Z</span><strong>ZestMem</strong><small>Console</small></div>
-    <button id="logout" hidden>Lock</button>
+  <header class="site-header">
+    <a class="brand" href="/console/" aria-label="ZestMem memory browser">
+      <span class="mark" aria-hidden="true">Z</span>
+      <span><strong>ZestMem</strong><small>Memory browser</small></span>
+    </a>
+    <div class="connection" id="connection" hidden>
+      <span><i aria-hidden="true"></i> Read only</span>
+      <button id="logout" class="quiet-button" type="button">Lock</button>
+    </div>
   </header>
+
   <main>
-    <section id="login" class="login panel">
-      <p class="eyebrow">Durable project memory</p>
-      <h1>Open your memory bank</h1>
-      <p>Enter a ZestMem API key. It stays only in this page's memory and is cleared when the tab closes.</p>
+    <section id="login" class="login panel" aria-labelledby="login-title">
+      <p class="eyebrow">Durable agent memory</p>
+      <h1 id="login-title">Browse what your agents remember.</h1>
+      <p class="lede">Connect with a dedicated Reader API key or short-lived access token. The credential stays in this tab's memory and is never written to a cookie, URL, or browser storage.</p>
       <form id="login-form">
-        <label for="token">API key</label>
-        <input id="token" type="password" autocomplete="off" spellcheck="false" required>
-        <button type="submit">Connect</button>
+        <label for="token">Bearer credential</label>
+        <div class="login-control">
+          <input id="token" type="password" autocomplete="off" spellcheck="false" required autofocus>
+          <button type="submit" class="primary-button">Open memory browser</button>
+        </div>
       </form>
       <p id="login-error" class="error" role="alert"></p>
     </section>
 
     <section id="workspace" hidden>
-      <aside class="panel">
-        <p class="eyebrow">Spaces</p>
+      <aside class="panel sidebar" id="space-sidebar" aria-label="Memory spaces">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">Memory spaces</p>
+            <p id="space-count" class="muted"></p>
+          </div>
+          <button id="close-sidebar" class="icon-button" type="button" aria-label="Close spaces">×</button>
+        </div>
         <nav id="spaces" aria-label="Memory spaces"></nav>
+        <button id="load-spaces" class="load-spaces" type="button" hidden>Load more Spaces</button>
       </aside>
+      <button id="sidebar-backdrop" type="button" aria-label="Close Spaces" hidden></button>
+
       <section class="content">
-        <form id="search-form" class="search panel">
-          <label for="query">Search memories</label>
-          <div><input id="query" type="search" placeholder="Decisions, constraints, root causes…" required><button>Recall</button></div>
-          <p id="status" aria-live="polite"></p>
-        </form>
+        <section class="toolbar panel" aria-label="Browse controls">
+          <div class="toolbar-topline">
+            <button id="open-sidebar" class="quiet-button spaces-toggle" type="button" aria-expanded="false" aria-controls="space-sidebar">Spaces</button>
+            <form id="search-form" role="search">
+              <label class="sr-only" for="query">Search memories</label>
+              <input id="query" type="search" placeholder="Search decisions, constraints, root causes…" spellcheck="false">
+              <button type="submit" class="primary-button">Search</button>
+            </form>
+            <button id="clear-search" class="quiet-button" type="button" hidden>Browse newest</button>
+          </div>
+          <div class="filters">
+            <label for="kind">Kind</label>
+            <select id="kind">
+              <option value="">All kinds</option>
+              <option value="directive">Directive</option>
+              <option value="decision">Decision</option>
+              <option value="fact">Fact</option>
+              <option value="procedure">Procedure</option>
+              <option value="lesson">Lesson</option>
+              <option value="reference">Reference</option>
+            </select>
+            <label for="topic">Topic</label>
+            <select id="topic"><option value="">All topics</option></select>
+            <p id="status" aria-live="polite"></p>
+          </div>
+        </section>
+
         <div class="columns">
-          <section id="results" class="panel list" aria-label="Recall results"></section>
-          <article id="memory" class="panel memory">
-            <p class="empty">Select a recalled memory to read its full revision and provenance.</p>
+          <section class="panel result-panel" aria-labelledby="results-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow" id="result-kicker">Newest first</p>
+                <h2 id="results-title">Memories</h2>
+              </div>
+            </div>
+            <div id="results" class="result-list"></div>
+            <button id="load-more" class="load-more" type="button" hidden>Load more</button>
+          </section>
+
+          <article id="memory" class="panel memory" aria-live="polite">
+            <div class="empty-state">
+              <span aria-hidden="true">⌁</span>
+              <h2>Choose a memory</h2>
+              <p>Select a result to read its current revision, topics, provenance, and reason for remembering.</p>
+            </div>
           </article>
         </div>
       </section>

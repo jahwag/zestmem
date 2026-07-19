@@ -13,18 +13,44 @@ import (
 )
 
 type fakeService struct {
-	catalog memory.CatalogResult
-	recall  memory.RecallResult
-	read    memory.Memory
-	query   memory.RecallQuery
+	catalog     memory.CatalogResult
+	browse      memory.BrowseResult
+	recall      memory.RecallResult
+	read        memory.Memory
+	browseQuery memory.BrowseQuery
+	query       memory.RecallQuery
 }
 
 func (f *fakeService) Catalog(context.Context, memory.Principal, []memory.WorkspaceClaim, ...string) (memory.CatalogResult, error) {
 	return f.catalog, nil
 }
+func (f *fakeService) BrowsePage(_ context.Context, query memory.BrowseQuery) (memory.BrowseResult, error) {
+	f.browseQuery = query
+	return f.browse, nil
+}
 func (f *fakeService) RecallPage(_ context.Context, query memory.RecallQuery) (memory.RecallResult, error) {
 	f.query = query
 	return f.recall, nil
+}
+
+func TestBrowseUsesAuthenticatedPrincipalAndFilters(t *testing.T) {
+	service := &fakeService{browse: memory.BrowseResult{Items: []memory.BrowseItem{{MemoryID: "m1", Title: "Recent memory"}}}}
+	handler := Handler(service, testProtect)
+	body := `{"space_ids":["s1"],"kinds":["decision"],"topics":["security"],"limit":24}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/browse", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if service.browseQuery.Principal.ID == "" || service.browseQuery.Limit != 24 || service.browseQuery.SpaceIDs[0] != "s1" {
+		t.Fatalf("unexpected query: %#v", service.browseQuery)
+	}
+	var result memory.BrowseResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Items) != 1 {
+		t.Fatalf("unexpected response: %v %#v", err, result)
+	}
 }
 func (f *fakeService) Read(context.Context, memory.Principal, string) (memory.Memory, error) {
 	return f.read, nil
@@ -52,7 +78,7 @@ func TestConsoleStaticHasSecurityHeadersAndNoCredentialRequirement(t *testing.T)
 	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "default-src 'none'") {
 		t.Fatal("strict CSP missing")
 	}
-	if !strings.Contains(response.Body.String(), "Open your memory bank") {
+	if !strings.Contains(response.Body.String(), "Browse what your agents remember") {
 		t.Fatal("console HTML missing")
 	}
 }
@@ -90,6 +116,17 @@ func TestRecallUsesAuthenticatedPrincipalAndFilters(t *testing.T) {
 func TestRecallRejectsUnknownFields(t *testing.T) {
 	handler := Handler(&fakeService{}, testProtect)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/recall", strings.NewReader(`{"query":"x","mutation":true}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestBrowseRejectsTrailingJSON(t *testing.T) {
+	handler := Handler(&fakeService{}, testProtect)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/browse", strings.NewReader(`{"limit":20}{"limit":1}`))
 	request.Header.Set("Authorization", "Bearer test")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

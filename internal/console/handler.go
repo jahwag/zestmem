@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -15,8 +16,17 @@ import (
 
 type Service interface {
 	Catalog(context.Context, memory.Principal, []memory.WorkspaceClaim, ...string) (memory.CatalogResult, error)
+	BrowsePage(context.Context, memory.BrowseQuery) (memory.BrowseResult, error)
 	RecallPage(context.Context, memory.RecallQuery) (memory.RecallResult, error)
 	Read(context.Context, memory.Principal, string) (memory.Memory, error)
+}
+
+type browseRequest struct {
+	SpaceIDs []string      `json:"space_ids,omitempty"`
+	Kinds    []memory.Kind `json:"kinds,omitempty"`
+	Topics   []string      `json:"topics,omitempty"`
+	Limit    int           `json:"limit,omitempty"`
+	Cursor   string        `json:"cursor,omitempty"`
 }
 
 //go:embed assets/*
@@ -47,6 +57,23 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 		result, err := domain.Catalog(r.Context(), principal, nil, r.URL.Query().Get("cursor"))
 		writeJSON(w, result, err)
 	})))
+	mux.Handle("POST /api/v1/browse", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := authn.PrincipalFromContext(r.Context())
+		if !ok {
+			writeError(w, memory.ErrForbidden)
+			return
+		}
+		var input browseRequest
+		if err := decodeRequest(w, r, &input); err != nil {
+			writeError(w, memory.ErrInvalidInput)
+			return
+		}
+		result, err := domain.BrowsePage(r.Context(), memory.BrowseQuery{
+			SpaceIDs: input.SpaceIDs, Kinds: input.Kinds, Topics: input.Topics,
+			Limit: input.Limit, Cursor: input.Cursor, Principal: principal,
+		})
+		writeJSON(w, result, err)
+	})))
 	mux.Handle("POST /api/v1/recall", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := authn.PrincipalFromContext(r.Context())
 		if !ok {
@@ -54,9 +81,7 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 			return
 		}
 		var input recallRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil || strings.TrimSpace(input.Query) == "" {
+		if err := decodeRequest(w, r, &input); err != nil || strings.TrimSpace(input.Query) == "" {
 			writeError(w, memory.ErrInvalidInput)
 			return
 		}
@@ -78,10 +103,24 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 	return securityHeaders(mux)
 }
 
+func decodeRequest(w http.ResponseWriter, r *http.Request, value any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request must contain exactly one JSON value")
+	}
+	return nil
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r)

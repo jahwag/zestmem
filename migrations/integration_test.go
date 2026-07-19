@@ -74,7 +74,7 @@ func TestApplyCreatesAndRechecksFreshDatabase(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(versions) != "[1 2]" {
+	if fmt.Sprint(versions) != "[1 2 3]" {
 		t.Fatalf("applied versions=%v", versions)
 	}
 	var authorizationFunctions bool
