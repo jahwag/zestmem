@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ZestMem Console</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div><span class="mark">Z</span><strong>ZestMem</strong><small>Console</small></div>
+    <button id="logout" hidden>Lock</button>
+  </header>
+  <main>
+    <section id="login" class="login panel">
+      <p class="eyebrow">Durable project memory</p>
+      <h1>Open your memory bank</h1>
+      <p>Enter a ZestMem API key. It stays only in this page's memory and is cleared when the tab closes.</p>
+      <form id="login-form">
+        <label for="token">API key</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+        <button type="submit">Connect</button>
+      </form>
+      <p id="login-error" class="error" role="alert"></p>
+    </section>
+
+    <section id="workspace" hidden>
+      <aside class="panel">
+        <p class="eyebrow">Spaces</p>
+        <nav id="spaces" aria-label="Memory spaces"></nav>
+      </aside>
+      <section class="content">
+        <form id="search-form" class="search panel">
+          <label for="query">Search memories</label>
+          <div><input id="query" type="search" placeholder="Decisions, constraints, root causes…" required><button>Recall</button></div>
+          <p id="status" aria-live="polite"></p>
+        </form>
+        <div class="columns">
+          <section id="results" class="panel list" aria-label="Recall results"></section>
+          <article id="memory" class="panel memory">
+            <p class="empty">Select a recalled memory to read its full revision and provenance.</p>
+          </article>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

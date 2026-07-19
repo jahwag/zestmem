@@ -15,6 +15,7 @@ import (
 
 	"github.com/bytelope/zestmem/internal/authn"
 	"github.com/bytelope/zestmem/internal/buildinfo"
+	"github.com/bytelope/zestmem/internal/console"
 	"github.com/bytelope/zestmem/internal/embed"
 	"github.com/bytelope/zestmem/internal/httpx"
 	"github.com/bytelope/zestmem/internal/mcpserver"
@@ -69,8 +70,15 @@ func main() {
 	domain.WithEmbedder(embed.NewObserved(embed.NewLimited(tei, envInt("TEI_CONCURRENCY", 4)), metrics))
 	mcpHandler := mcpserver.New(domain, metrics).Handler()
 	limiter := httpx.NewLimiter(envInt("RATE_LIMIT_PER_MINUTE", 120), envInt("RATE_LIMIT_BURST", 20), metrics)
+	protect := func(next http.Handler) http.Handler { return authenticator.Middleware(limiter.Middleware(next)) }
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", authenticator.Middleware(limiter.Middleware(http.MaxBytesHandler(mcpHandler, 1<<20))))
+	consoleHandler := console.Handler(domain, protect)
+	mux.Handle("/console/", consoleHandler)
+	mux.Handle("/api/v1/", consoleHandler)
+	mux.HandleFunc("GET /console", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
+	})
 	bootstrapHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := authn.PrincipalFromContext(r.Context())
 		if !ok {

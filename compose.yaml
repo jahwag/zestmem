@@ -12,6 +12,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   tei:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07 # cpu-1.8
@@ -24,6 +25,7 @@ services:
       - "80"
     volumes:
       - tei-cache:/data
+    restart: unless-stopped
 
   memory:
     image: ghcr.io/bytelope/zestmem:0
@@ -42,6 +44,7 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
+    restart: unless-stopped
   caddy:
     image: docker.io/library/caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 # 2.10.2-alpine
     environment:
@@ -54,6 +57,7 @@ services:
       - caddy-data:/data
     depends_on:
       - memory
+    restart: unless-stopped
 
   backup:
     image: ghcr.io/bytelope/zestmem-backup:0
@@ -64,6 +68,10 @@ services:
       PGUSER: memory
       PGPASSWORD: ${POSTGRES_PASSWORD}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      GITHUB_BACKUP_REPOSITORY: ${GITHUB_BACKUP_REPOSITORY:-}
+      GITHUB_BACKUP_RETENTION_DAYS: ${GITHUB_BACKUP_RETENTION_DAYS:-30}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      AGE_RECIPIENT: ${AGE_RECIPIENT:-}
     volumes:
       - backups:/backups
     restart: unless-stopped

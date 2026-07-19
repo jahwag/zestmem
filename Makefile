@@ -31,6 +31,7 @@ integration:
 	CONTAINER_RUNTIME=$(CONTAINER_RUNTIME) sh ops/test-integration.sh
 
 backup:
+	sh ops/test-github-upload.sh
 	$(CONTAINER_RUNTIME) build -f Containerfile.backup -t localhost/agent-memory-backup:m1 .
 	CONTAINER_RUNTIME=$(CONTAINER_RUNTIME) sh ops/test-backup.sh
 
