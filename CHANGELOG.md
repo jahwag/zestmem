@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/Bytelope/zestmem/compare/v0.7.0...v0.7.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* apply visible memory filters consistently ([#41](https://github.com/Bytelope/zestmem/issues/41)) ([87e2a23](https://github.com/Bytelope/zestmem/commit/87e2a23a25e3b0839b5a3aa9aed9256400998dae))
+
 ## [0.7.0](https://github.com/Bytelope/zestmem/compare/v0.6.0...v0.7.0) (2026-07-20)
 
 
