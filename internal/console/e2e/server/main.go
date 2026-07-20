@@ -30,7 +30,7 @@ func (fixtureService) DiscoverMetadata(ctx context.Context, query memory.Metadat
 	}
 	values := map[memory.MetadataFacet][]memory.MetadataValue{
 		memory.MetadataTopic:                 {{Value: "security", MemoryCount: 3}, {Value: "architecture", MemoryCount: 1}},
-		memory.MetadataProvenanceClass:       {{Value: "verified", MemoryCount: 2}},
+		memory.MetadataProvenanceClass:       {{Value: "git_commit", MemoryCount: 2}},
 		memory.MetadataProvenanceLocator:     {{Value: "architecture review", MemoryCount: 1}},
 		memory.MetadataProvenanceAttribution: {{Value: "Avery User", MemoryCount: 1}},
 	}
@@ -73,7 +73,7 @@ func (fixtureService) BrowsePage(_ context.Context, query memory.BrowseQuery) (m
 	if query.Revision != nil && *query.Revision != 2 {
 		return memory.BrowseResult{}, nil
 	}
-	if len(query.ProvenanceClasses) > 0 && query.ProvenanceClasses[0] != "verified" {
+	if len(query.ProvenanceClasses) > 0 && query.ProvenanceClasses[0] != "git_commit" {
 		return memory.BrowseResult{}, nil
 	}
 	if len(query.ProvenanceLocators) > 0 && query.ProvenanceLocators[0] != "architecture review" {
@@ -110,6 +110,12 @@ func (fixtureService) BrowsePage(_ context.Context, query memory.BrowseQuery) (m
 }
 
 func (fixtureService) RecallPage(_ context.Context, query memory.RecallQuery) (memory.RecallResult, error) {
+	if query.Revision != nil && *query.Revision != 2 {
+		return memory.RecallResult{}, nil
+	}
+	if len(query.ProvenanceClasses) > 0 && query.ProvenanceClasses[0] != "git_commit" {
+		return memory.RecallResult{}, nil
+	}
 	if query.Query != "inert html" || len(query.Kinds) > 0 || len(query.Topics) > 0 ||
 		(len(query.SpaceIDs) == 1 && query.SpaceIDs[0] != alphaSpace) {
 		return memory.RecallResult{}, nil
@@ -148,8 +154,11 @@ func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (me
 		CurrentRevision: memory.Revision{
 			MemoryID: id, Number: 2, Title: title, Body: "Literal body: <img src=x onerror=window.hacked=true>",
 			Kind: kind, Topics: []string{"security", "ui"},
-			Provenance: []memory.Provenance{{Class: "verified", Locator: "architecture review", Attribution: "Avery User"}},
-			ActorID:    "agent", ActorDisplayName: "Athena", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
+			Provenance: []memory.Provenance{
+				{Class: "git_commit", Locator: "architecture review", Attribution: "Avery User"},
+				{Class: "long_exact_provenance_class_token_that_must_wrap_without_being_clipped", Locator: "mobile layout review"},
+			},
+			ActorID: "agent", ActorDisplayName: "Athena", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
 		},
 	}, nil
 }

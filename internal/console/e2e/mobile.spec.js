@@ -22,6 +22,8 @@ test('mobile Space drawer and detail navigation remain usable', async ({page}) =
   await expect(lastMemory).toBeVisible();
   await lastMemory.click();
   await expect(page.getByRole('heading', {name: 'Alpha memory 20'})).toBeVisible();
+  await expect(page.locator('#memory .source strong').last()).toHaveText('long_exact_provenance_class_token_that_must_wrap_without_being_clipped');
+  await expect.poll(() => page.locator('#memory').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   await expect.poll(async () => page.locator('#memory').evaluate(node => {
     const box = node.getBoundingClientRect();
     return box.top >= 0 && box.top < window.innerHeight;

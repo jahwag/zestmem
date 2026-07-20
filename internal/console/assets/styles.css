@@ -236,7 +236,7 @@ select { width: auto; min-width: 145px; }
 .detail-section h3 { margin: 0 0 9px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 .detail-section p { margin: 0; color: #c6d3d0; overflow-wrap: anywhere; }
 .source { display: grid; grid-template-columns: minmax(100px, 28%) 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid #202b30; font-size: 12px; }
-.source strong { color: var(--sky); }
+.source strong { min-width: 0; overflow-wrap: anywhere; color: var(--sky); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .source span { color: var(--muted); overflow-wrap: anywhere; }
 .source em { color: var(--citrus); font-style: normal; }
 
