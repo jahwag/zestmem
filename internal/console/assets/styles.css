@@ -235,6 +235,12 @@ select { width: auto; min-width: 145px; }
 .detail-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .detail-section h3 { margin: 0 0 9px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 .detail-section p { margin: 0; color: #c6d3d0; overflow-wrap: anywhere; }
+.association-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.association { display: grid; gap: 8px; padding: 12px; border: 1px solid #202b30; border-radius: 8px; }
+.association-facts { display: grid; gap: 6px; margin: 0; }
+.association-facts div { display: grid; grid-template-columns: minmax(110px, 28%) 1fr; gap: 12px; }
+.association-facts dt { color: var(--muted); }
+.association-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); }
 .source { display: grid; grid-template-columns: minmax(100px, 28%) 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid #202b30; font-size: 12px; }
 .source strong { min-width: 0; overflow-wrap: anywhere; color: var(--sky); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .source span { color: var(--muted); overflow-wrap: anywhere; }

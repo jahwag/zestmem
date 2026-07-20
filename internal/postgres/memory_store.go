@@ -14,7 +14,25 @@ import (
 
 const memoryColumns = `m.id::text, m.space_id::text, m.status::text, m.created_at,
  r.revision, r.title, r.body, r.kind::text, r.topics, r.provenance, r.valid_until,
- r.content_hash, r.actor_id::text, (SELECT display_name FROM principals WHERE id=r.actor_id), r.created_at, r.reason`
+ r.content_hash, r.actor_id::text, (SELECT display_name FROM principals WHERE id=r.actor_id), r.created_at, r.reason,
+ coalesce((SELECT jsonb_agg(jsonb_build_object(
+   'assertion_id',a.id::text,
+   'relationship',a.relationship,
+   'principal_id',a.principal_id::text,
+   'principal_display_name',subject.display_name,
+   'basis_revision',a.basis_revision,
+   'basis_class',a.basis_class,
+   'basis_locator',a.basis_locator,
+   'asserted_by',a.asserted_by::text,
+   'asserted_by_display_name',asserter.display_name,
+   'asserted_at',a.asserted_at,
+   'reason',a.reason
+ ) ORDER BY a.asserted_at,a.id)
+ FROM memory_principal_assertions a
+ JOIN principals subject ON subject.id=a.principal_id
+ JOIN principals asserter ON asserter.id=a.asserted_by
+ LEFT JOIN memory_principal_assertion_retractions x ON x.assertion_id=a.id
+ WHERE a.memory_id=m.id AND x.assertion_id IS NULL),'[]'::jsonb)`
 
 type Fingerprint struct {
 	Provider, Model, ModelRevision, Normalization, QueryPrefix, DocumentPrefix string
@@ -260,11 +278,12 @@ func getTx(ctx context.Context, q queryRower, id string) (memory.Memory, error) 
 func scanMemory(row rowScanner) (memory.Memory, error) {
 	var mem memory.Memory
 	var kind, status string
-	var provenanceJSON []byte
+	var provenanceJSON, associationsJSON []byte
 	err := row.Scan(&mem.ID, &mem.SpaceID, &status, &mem.CreatedAt,
 		&mem.CurrentRevision.Number, &mem.CurrentRevision.Title, &mem.CurrentRevision.Body, &kind,
 		&mem.CurrentRevision.Topics, &provenanceJSON, &mem.CurrentRevision.ValidUntil,
-		&mem.CurrentRevision.ContentHash, &mem.CurrentRevision.ActorID, &mem.CurrentRevision.ActorDisplayName, &mem.CurrentRevision.CreatedAt, &mem.CurrentRevision.Reason)
+		&mem.CurrentRevision.ContentHash, &mem.CurrentRevision.ActorID, &mem.CurrentRevision.ActorDisplayName, &mem.CurrentRevision.CreatedAt, &mem.CurrentRevision.Reason,
+		&associationsJSON)
 	if err != nil {
 		return memory.Memory{}, err
 	}
@@ -272,6 +291,9 @@ func scanMemory(row rowScanner) (memory.Memory, error) {
 	mem.CurrentRevision.MemoryID = mem.ID
 	mem.CurrentRevision.Kind = memory.Kind(kind)
 	if err := json.Unmarshal(provenanceJSON, &mem.CurrentRevision.Provenance); err != nil {
+		return memory.Memory{}, err
+	}
+	if err := json.Unmarshal(associationsJSON, &mem.HistoricalAssociations); err != nil {
 		return memory.Memory{}, err
 	}
 	return mem, nil

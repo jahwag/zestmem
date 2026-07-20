@@ -363,6 +363,19 @@ func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegment
 		locator, truncated := utf8Prefix(source.Locator, 240)
 		result.Provenance = append(result.Provenance, ProvenancePreview{Class: source.Class, Locator: locator, LocatorTruncated: truncated, Attribution: source.Attribution})
 	}
+	for _, association := range memoryValue.HistoricalAssociations[:min(len(memoryValue.HistoricalAssociations), 8)] {
+		basis, truncated := utf8Prefix(association.BasisLocator, 240)
+		reason, reasonTruncated := utf8Prefix(association.Reason, 240)
+		result.HistoricalAssociations = append(result.HistoricalAssociations, HistoricalAssociationPreview{
+			AssertionID: association.AssertionID, Relationship: association.Relationship, PrincipalID: association.PrincipalID,
+			PrincipalDisplayName: association.PrincipalDisplayName, BasisRevision: association.BasisRevision,
+			BasisClass: association.BasisClass, BasisLocator: basis, BasisTruncated: truncated,
+			AssertedBy: association.AssertedBy, AssertedByDisplayName: association.AssertedByDisplayName,
+			AssertedAt: association.AssertedAt,
+			Reason:     reason, ReasonTruncated: reasonTruncated,
+		})
+	}
+	result.OmittedHistoricalAssociations = len(memoryValue.HistoricalAssociations) - len(result.HistoricalAssociations)
 	result.OmittedProvenance = len(memoryValue.CurrentRevision.Provenance) - len(result.Provenance)
 	lines := strings.Split(body, "\n")
 	if query.MaxBytes == 0 {

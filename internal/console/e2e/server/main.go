@@ -149,8 +149,26 @@ func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (me
 	case strings.HasPrefix(id, "alpha-memory-"):
 		kind = memory.KindFact
 	}
+	var associations []memory.HistoricalAssociation
+	if id == "memory-1" {
+		associations = []memory.HistoricalAssociation{{
+			Relationship: "intended_agent", PrincipalID: "athena-principal", PrincipalDisplayName: "Athena",
+			BasisRevision: 1, BasisClass: "legacy_role_path", BasisLocator: "worker/athena",
+			AssertedBy: "migration-operator", AssertedByDisplayName: "Migration Operator",
+			AssertedAt: time.Date(2026, 7, 20, 13, 0, 0, 0, time.UTC), Reason: "Legacy worker collection mapping",
+		}}
+	} else if id == "alpha-memory-20" {
+		associations = []memory.HistoricalAssociation{{
+			AssertionID: "assertion-" + strings.Repeat("a", 180), Relationship: "intended_agent",
+			PrincipalID: "athena-" + strings.Repeat("p", 180), PrincipalDisplayName: "Athena",
+			BasisRevision: 1, BasisClass: "legacy_role_path", BasisLocator: strings.Repeat("worker/very-long-segment/", 70),
+			AssertedBy: "migration-operator-" + strings.Repeat("o", 180), AssertedByDisplayName: "Migration Operator",
+			AssertedAt: time.Date(2026, 7, 20, 13, 0, 0, 0, time.UTC), Reason: strings.Repeat("Reviewed legacy mapping evidence. ", 40),
+		}}
+	}
 	return memory.Memory{
 		ID: id, SpaceID: spaceID, Status: memory.StatusActive, CreatedAt: time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC),
+		HistoricalAssociations: associations,
 		CurrentRevision: memory.Revision{
 			MemoryID: id, Number: 2, Title: title, Body: "Literal body: <img src=x onerror=window.hacked=true>",
 			Kind: kind, Topics: []string{"security", "ui"},
@@ -158,7 +176,7 @@ func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (me
 				{Class: "git_commit", Locator: "architecture review", Attribution: "Avery User"},
 				{Class: "long_exact_provenance_class_token_that_must_wrap_without_being_clipped", Locator: "mobile layout review"},
 			},
-			ActorID: "agent", ActorDisplayName: "Athena", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
+			ActorID: "migration-operator", ActorDisplayName: "Migration Operator", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
 		},
 	}, nil
 }

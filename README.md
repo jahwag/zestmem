@@ -47,7 +47,7 @@ The console shows exact filtered authorized totals while browsing; browses newes
 
 Agents can page or search authorized Topic and Provenance vocabularies with usage counts. `remember` and `revise_memory` return unfamiliar Topics plus established examples; retry with the exact `confirm_new_topics` set to introduce them intentionally. `read_memory` keeps its full-Memory response for compatibility. `read_memory_segment` defaults to at most 80 lines and 4 KiB, includes bounded topic/provenance plus freshness metadata, supports resumable line/byte windows, and accepts a regular expression for grep-style inspection.
 
-Source attribution is a free-form, unverified display-name claim—not identity. Agents should reuse a human's chosen stable name found through `list_provenance(field: "attribution")`; they must not infer names or store contact identifiers. The authenticated Actor Principal remains the audit identity.
+Source attribution is a free-form, unverified display-name claim—not identity. Agents should reuse a human's chosen stable name found through `list_provenance(field: "attribution")`; they must not infer names or store contact identifiers. The authenticated Actor Principal remains the audit identity. Active administratively recorded Principal associations, when present, record a claimed historical Intended Agent together with who asserted it, when, why, and its stated basis. They do not imply that Principal authored or supplied the Memory, change the authenticated revision Actor, establish Memory ownership, or grant access; retracted assertion history remains in PostgreSQL and audit events.
 
 For a remote loopback-only deployment:
 

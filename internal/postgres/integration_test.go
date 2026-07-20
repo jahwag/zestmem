@@ -66,7 +66,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 3 {
+	if err != nil || migrationCount != 4 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
@@ -77,6 +77,58 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	}
 	if created.Memory.CurrentRevision.ActorDisplayName != "agent" || created.Memory.CurrentRevision.Provenance[0].Attribution != "User One" {
 		t.Fatalf("attribution=%#v actor=%q", created.Memory.CurrentRevision.Provenance, created.Memory.CurrentRevision.ActorDisplayName)
+	}
+	assertionConn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assertionID string
+	err = assertionConn.QueryRow(ctx, `INSERT INTO memory_principal_assertions
+	 (memory_id,relationship,principal_id,basis_revision,basis_class,basis_locator,asserted_by,reason)
+	 VALUES($1,'intended_agent',$2,1,'legacy_role_path','worker/athena',$3,'Legacy worker collection mapping')
+	 RETURNING id::text`, created.Memory.ID, other, owner).Scan(&assertionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = assertionConn.Exec(ctx, `UPDATE memory_principal_assertions SET reason='rewritten' WHERE id=$1`, assertionID); err == nil {
+		t.Fatal("append-only assertion accepted an update")
+	}
+	if _, err = assertionConn.Exec(ctx, `INSERT INTO memory_principal_assertions
+	 (memory_id,relationship,principal_id,basis_revision,basis_class,asserted_by,reason)
+	 VALUES($1,'intended_agent',$2,1,'legacy_role_path',$3,'conflict')`, created.Memory.ID, agent, owner); err == nil {
+		t.Fatal("second active intended-agent assertion was accepted")
+	}
+	if _, err = assertionConn.Exec(ctx, `INSERT INTO memory_principal_assertion_retractions(assertion_id,retracted_by,retracted_at,reason)
+	 VALUES($1,$2,'2000-01-01T00:00:00Z','invalid chronology')`, assertionID, owner); err == nil {
+		t.Fatal("retraction before assertion was accepted")
+	}
+	if _, err = assertionConn.Exec(ctx, `INSERT INTO memory_principal_assertion_retractions(assertion_id,retracted_by,reason)
+	 VALUES($1,$2,'Correct the administrative association')`, assertionID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = assertionConn.Exec(ctx, `INSERT INTO memory_principal_assertions
+	 (memory_id,relationship,principal_id,basis_revision,basis_class,basis_locator,asserted_by,reason)
+	 VALUES($1,'intended_agent',$2,1,'legacy_role_path','worker/athena',$3,'Reviewed legacy worker mapping')`,
+		created.Memory.ID, other, owner); err != nil {
+		t.Fatal(err)
+	}
+	var assertionAudits int
+	if err = assertionConn.QueryRow(ctx, `SELECT count(*) FROM audit_events
+	 WHERE target_type='memory_principal_assertion' AND action IN ('assert_memory_principal','retract_memory_principal_assertion')`).Scan(&assertionAudits); err != nil || assertionAudits != 3 {
+		t.Fatalf("assertion audit count=%d err=%v", assertionAudits, err)
+	}
+	assertionConn.Close(ctx)
+	associated, err := svc.Read(ctx, cmd.Principal, created.Memory.ID)
+	if err != nil || len(associated.HistoricalAssociations) != 1 {
+		t.Fatalf("historical associations=%#v err=%v", associated.HistoricalAssociations, err)
+	}
+	association := associated.HistoricalAssociations[0]
+	if association.Relationship != "intended_agent" || association.PrincipalID != other || association.PrincipalDisplayName != "other" || association.AssertedBy != owner || associated.CurrentRevision.ActorID != agent {
+		t.Fatalf("historical association=%#v", association)
+	}
+	segment, err := svc.ReadSegment(ctx, memory.ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID})
+	if err != nil || len(segment.HistoricalAssociations) != 1 || segment.HistoricalAssociations[0].BasisRevision != 1 || segment.HistoricalAssociations[0].AssertedBy != owner || segment.HistoricalAssociations[0].Reason == "" {
+		t.Fatalf("segment historical associations=%#v err=%v", segment.HistoricalAssociations, err)
 	}
 	if err := store.VerifyEmbeddingFingerprint(ctx); err != nil {
 		t.Fatalf("valid active embedding fingerprint rejected: %v", err)

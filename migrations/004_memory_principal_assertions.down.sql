@@ -1,0 +1,13 @@
+DROP TRIGGER IF EXISTS memory_principal_assertion_retractions_audit ON memory_principal_assertion_retractions;
+DROP TRIGGER IF EXISTS memory_principal_assertions_audit ON memory_principal_assertions;
+DROP TRIGGER IF EXISTS memory_principal_assertions_single_active ON memory_principal_assertions;
+DROP TRIGGER IF EXISTS memory_principal_assertion_retractions_chronology ON memory_principal_assertion_retractions;
+DROP TRIGGER IF EXISTS memory_principal_assertion_retractions_immutable ON memory_principal_assertion_retractions;
+DROP TRIGGER IF EXISTS memory_principal_assertions_immutable ON memory_principal_assertions;
+DROP FUNCTION IF EXISTS audit_principal_assertion_retraction();
+DROP FUNCTION IF EXISTS audit_principal_assertion_insert();
+DROP FUNCTION IF EXISTS ensure_single_active_principal_assertion();
+DROP FUNCTION IF EXISTS validate_principal_assertion_retraction();
+DROP FUNCTION IF EXISTS reject_principal_assertion_mutation();
+DROP TABLE IF EXISTS memory_principal_assertion_retractions;
+DROP TABLE IF EXISTS memory_principal_assertions;
