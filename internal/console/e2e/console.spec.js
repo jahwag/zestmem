@@ -30,6 +30,8 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.getByText('Prevent active content in durable memories')).toBeVisible();
   await expect(page.getByText('Athena')).toBeVisible();
   await expect(page.getByText('Claimed source attribution: Avery User')).toBeVisible();
+  const displayedClass = await page.locator('#memory .source strong').first().textContent();
+  expect(displayedClass).toBe('git_commit');
   await expect(page.getByText('agent', {exact: true})).toBeVisible();
   await expect(page.locator('pre.body')).toContainText('<img src=x onerror=window.hacked=true>');
   expect(await page.evaluate(() => window.hacked)).toBeUndefined();
@@ -40,19 +42,19 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.locator('#status')).toHaveText('3 of 3 matching active memories loaded');
 
   await page.getByRole('button', {name: 'More filters'}).click();
-  await page.getByLabel('Revision').fill('3');
+  await page.getByLabel('Current revision').fill('3');
   await page.getByLabel('Kind').selectOption('lesson');
-  await expect(page.getByRole('button', {name: /Old deployment lesson/})).toBeVisible();
-  const uncommittedBrowse = requests.filter(request => request.url.endsWith('/api/v1/browse')).at(-1);
-  expect(JSON.parse(uncommittedBrowse.body)).not.toHaveProperty('revision');
+  await expect(page.getByText('No memories here')).toBeVisible();
+  const refreshedBrowse = requests.filter(request => request.url.endsWith('/api/v1/browse')).at(-1);
+  expect(JSON.parse(refreshedBrowse.body)).toMatchObject({revision: 3, kinds: ['lesson']});
   await page.getByLabel('Kind').selectOption('');
-  await page.getByLabel('Revision').fill('2');
-  await page.getByLabel('Provenance class').fill('verified');
+  await page.getByLabel('Current revision').fill('2');
+  await page.getByLabel('Provenance class').fill(displayedClass);
   await page.getByLabel('Provenance locator').fill('architecture review');
   await page.getByLabel('Claimed source attribution').fill('Avery User');
-  await page.getByLabel('Revision').press('Enter');
+  await page.getByLabel('Current revision').press('Enter');
   const filteredBrowse = requests.filter(request => request.url.endsWith('/api/v1/browse')).at(-1);
-  expect(JSON.parse(filteredBrowse.body)).toMatchObject({revision: 2, provenance_classes: ['verified'], provenance_locators: ['architecture review'], provenance_attributions: ['Avery User'], statuses: ['active']});
+  expect(JSON.parse(filteredBrowse.body)).toMatchObject({revision: 2, provenance_classes: [displayedClass], provenance_locators: ['architecture review'], provenance_attributions: ['Avery User'], statuses: ['active']});
   await page.getByRole('button', {name: 'Clear filters'}).click();
 
   await page.getByLabel('Kind').selectOption('lesson');
@@ -104,6 +106,90 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.getByRole('heading', {name: 'Memories'})).toBeVisible();
   await page.getByRole('button', {name: 'Lock'}).click();
   expect(await page.evaluate(() => sessionStorage.getItem('zestmem.console.credential'))).toBeNull();
+});
+
+test('Search commits visible advanced filters and exact provenance tokens', async ({page}) => {
+  const requests = [];
+  page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
+  await page.goto('/console/');
+  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByRole('button', {name: 'Open memory browser'}).click();
+  await expect(page.getByRole('heading', {name: 'Memories'})).toBeVisible();
+
+  await page.getByRole('button', {name: 'More filters'}).click();
+  await page.getByLabel('Current revision').fill('3');
+  await page.getByLabel('Provenance class').fill('git_commit');
+  await page.getByPlaceholder('Search decisions, constraints, root causes…').fill('inert html');
+  await page.getByRole('button', {name: 'Search'}).click();
+  await expect(page.getByText('No relevant memories')).toBeVisible();
+  let recall = requests.filter(request => request.url.endsWith('/api/v1/recall')).at(-1);
+  expect(JSON.parse(recall.body)).toMatchObject({revision: 3, provenance_classes: ['git_commit']});
+
+  await page.getByLabel('Current revision').fill('2');
+  await page.getByRole('button', {name: 'Search'}).click();
+  await expect(page.getByRole('button', {name: /Keep HTML inert/})).toBeVisible();
+  recall = requests.filter(request => request.url.endsWith('/api/v1/recall')).at(-1);
+  expect(JSON.parse(recall.body)).toMatchObject({revision: 2, provenance_classes: ['git_commit']});
+});
+
+test('Load more restarts with dirty advanced filters', async ({page}) => {
+  const requests = [];
+  page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
+  await page.goto('/console/');
+  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByRole('button', {name: 'Open memory browser'}).click();
+  await expect(page.getByRole('button', {name: 'Load more', exact: true})).toBeVisible();
+
+  await page.getByRole('button', {name: 'More filters'}).click();
+  await page.getByLabel('Current revision').fill('3');
+  await page.getByRole('button', {name: 'Load more', exact: true}).click();
+  await expect(page.getByText('No memories here')).toBeVisible();
+  const browse = JSON.parse(requests.filter(request => request.url.endsWith('/api/v1/browse')).at(-1).body);
+  expect(browse).toMatchObject({revision: 3});
+  expect(browse).not.toHaveProperty('cursor');
+});
+
+test('invalid collapsed advanced filters do not corrupt search state', async ({page}) => {
+  const requests = [];
+  page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
+  await page.goto('/console/');
+  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByRole('button', {name: 'Open memory browser'}).click();
+  await expect(page.locator('#status')).toContainText('matching active');
+
+  await page.getByRole('button', {name: 'More filters'}).click();
+  await page.locator('#remembered-from').fill('2026-07-20');
+  await page.locator('#remembered-to').fill('2026-07-19');
+  await page.getByRole('button', {name: 'Fewer filters'}).click();
+  await page.getByPlaceholder('Search decisions, constraints, root causes…').fill('inert html');
+  await page.getByRole('button', {name: 'Search'}).click();
+
+  await expect(page.locator('#advanced-filters')).toBeVisible();
+  expect(await page.locator('#remembered-to').evaluate(input => input.validationMessage)).not.toBe('');
+  await expect(page.locator('#status')).toHaveText('Fix the highlighted advanced filter before loading memories.');
+  await expect(page.getByRole('button', {name: 'Browse newest'})).toBeHidden();
+  expect(requests.filter(request => request.url.endsWith('/api/v1/recall'))).toHaveLength(0);
+});
+
+test('failed filtered reload cannot reuse a stale cursor', async ({page}) => {
+  await page.goto('/console/');
+  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByRole('button', {name: 'Open memory browser'}).click();
+  await expect(page.getByRole('button', {name: 'Load more', exact: true})).toBeVisible();
+  await page.route('**/api/v1/browse', async route => {
+    const input = JSON.parse(route.request().postData() || '{}');
+    if (input.revision === 3) {
+      await route.fulfill({status: 500, contentType: 'application/json', body: '{"error":"injected failure"}'});
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole('button', {name: 'More filters'}).click();
+  await page.getByLabel('Current revision').fill('3');
+  await page.getByRole('button', {name: 'Apply filters'}).click();
+  await expect(page.locator('#status')).toContainText('(500)');
+  await expect(page.getByRole('button', {name: 'Load more', exact: true})).toBeHidden();
 });
 
 test('Lock aborts stale metadata from a previous credential', async ({page}) => {

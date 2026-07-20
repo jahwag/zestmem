@@ -178,6 +178,7 @@
   function handleSpaceClick(event) {
     const button = event.target.closest('.space');
     if (!button) return;
+    if (!commitAdvancedFilters()) return;
     selectedSpace = button.dataset.spaceId;
     $('spaces').querySelectorAll('.space').forEach(item => {
       const active = item === button;
@@ -186,7 +187,7 @@
     });
     closeSidebar();
     refreshMetadata();
-    loadResults(false);
+    loadResults(false, true);
   }
 
   function filters(cursor = '') {
@@ -232,6 +233,26 @@
     return valid;
   }
 
+  function commitAdvancedFilters() {
+    const form = $('advanced-filters');
+    if (!validateDateRanges() || !form.checkValidity()) {
+      setAdvancedFiltersExpanded(true);
+      const invalid = form.querySelector(':invalid');
+      if (invalid) {
+        invalid.reportValidity();
+        invalid.focus();
+      }
+      $('status').textContent = 'Fix the highlighted advanced filter before loading memories.';
+      return false;
+    }
+    committedAdvancedFilters = readAdvancedFilters();
+    return true;
+  }
+
+  function advancedFiltersDirty() {
+    return JSON.stringify(readAdvancedFilters()) !== JSON.stringify(committedAdvancedFilters) || !$('advanced-filters').checkValidity();
+  }
+
   function matchingDescription() {
     const statuses = committedAdvancedFilters.statuses || ['active'];
     const parts = [statuses.length > 1 ? 'active and retracted' : statuses[0]];
@@ -257,13 +278,17 @@
     return {items: result.items || [], cursor: result.next_cursor || '', totalCount: result.total_count || 0};
   }
 
-  async function loadResults(append) {
+  async function loadResults(append, filtersCommitted = false) {
+    if (append && advancedFiltersDirty()) return loadResults(false);
+    if (!append && !filtersCommitted && !commitAdvancedFilters()) return;
     const generation = append ? loadGeneration : ++loadGeneration;
     const cursor = append ? nextCursor : '';
     if (!append) {
       selectedMemory = '';
       loadedCount = 0;
       totalCount = 0;
+      nextCursor = '';
+      $('load-more').hidden = true;
       $('results').replaceChildren();
       showMemoryPlaceholder();
     }
@@ -381,7 +406,7 @@
       const row = element('div', 'source');
       const detail = element('span', '', source.locator || 'No locator');
       if (source.attribution) detail.append(document.createElement('br'), element('em', '', `Claimed source attribution: ${source.attribution}`));
-      row.append(element('strong', '', source.class.replaceAll('_', ' ')), detail);
+      row.append(element('strong', '', source.class), detail);
       provenance.append(row);
     }
     article.append(provenance);
@@ -448,6 +473,12 @@
     document.querySelector('.brand').inert = false;
     $('connection').inert = false;
     if (wasOpen && restoreFocus) $('open-sidebar').focus();
+  }
+
+  function setAdvancedFiltersExpanded(expanded) {
+    $('advanced-filters').hidden = !expanded;
+    $('toggle-filters').setAttribute('aria-expanded', String(expanded));
+    $('toggle-filters').textContent = expanded ? 'Fewer filters' : 'More filters';
   }
 
   function clearFilterValues() {
@@ -532,45 +563,44 @@
 
   $('search-form').addEventListener('submit', event => {
     event.preventDefault();
+    if (!commitAdvancedFilters()) return;
     committedQuery = currentQuery();
     mode = committedQuery ? 'search' : 'browse';
     $('clear-search').hidden = mode !== 'search';
-    loadResults(false);
+    loadResults(false, true);
   });
   $('clear-search').addEventListener('click', () => {
+    if (!commitAdvancedFilters()) return;
     $('query').value = '';
     committedQuery = '';
     mode = 'browse';
     $('clear-search').hidden = true;
-    loadResults(false);
+    loadResults(false, true);
     $('query').focus();
   });
-  $('kind').addEventListener('change', () => loadResults(false));
-  $('topic').addEventListener('change', () => loadResults(false));
+  $('kind').addEventListener('change', () => {
+    if (commitAdvancedFilters()) loadResults(false, true);
+  });
+  $('topic').addEventListener('change', () => {
+    if (commitAdvancedFilters()) loadResults(false, true);
+  });
   $('topic').addEventListener('input', () => scheduleMetadata('topic', 'topic', 'topic-values', 'topic-meta'));
   $('provenance-class').addEventListener('input', () => scheduleMetadata('provenance-class', 'provenance_class', 'provenance-class-values', 'provenance-class-meta'));
   $('provenance-locator').addEventListener('input', () => scheduleMetadata('provenance-locator', 'provenance_locator', 'provenance-locator-values', 'provenance-locator-meta'));
   $('provenance-attribution').addEventListener('input', () => scheduleMetadata('provenance-attribution', 'provenance_attribution', 'provenance-attribution-values', 'provenance-attribution-meta'));
   $('toggle-filters').addEventListener('click', event => {
     const expanded = $('advanced-filters').hidden;
-    $('advanced-filters').hidden = !expanded;
-    event.currentTarget.setAttribute('aria-expanded', String(expanded));
-    event.currentTarget.textContent = expanded ? 'Fewer filters' : 'More filters';
+    setAdvancedFiltersExpanded(expanded);
   });
   $('advanced-filters').addEventListener('submit', event => {
     event.preventDefault();
-    if (!validateDateRanges() || !event.currentTarget.checkValidity()) {
-      event.currentTarget.reportValidity();
-      return;
-    }
-    committedAdvancedFilters = readAdvancedFilters();
+    if (!commitAdvancedFilters()) return;
     refreshMetadata();
-    loadResults(false);
+    loadResults(false, true);
   });
   $('memory-status').addEventListener('change', refreshMetadata);
   $('clear-filters').addEventListener('click', () => {
     clearFilterValues();
-    committedAdvancedFilters = readAdvancedFilters();
     refreshMetadata();
     loadResults(false);
   });
