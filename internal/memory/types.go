@@ -15,6 +15,15 @@ const (
 	KindReference Kind = "reference"
 )
 
+func (s Status) Valid() bool {
+	switch s {
+	case StatusActive, StatusRetracted, StatusCorrected, StatusSuperseded, StatusExpired, StatusPurged:
+		return true
+	default:
+		return false
+	}
+}
+
 func (k Kind) Valid() bool {
 	switch k {
 	case KindDirective, KindDecision, KindFact, KindProcedure, KindLesson, KindReference:
@@ -45,13 +54,15 @@ const (
 )
 
 type Principal struct {
-	ID   string
-	Type string
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type Provenance struct {
-	Class   string `json:"class"`
-	Locator string `json:"locator,omitempty"`
+	Class       string `json:"class" jsonschema:"Source class, such as user_instruction, repository, or web"`
+	Locator     string `json:"locator,omitempty" jsonschema:"Optional exact source locator"`
+	Attribution string `json:"attribution,omitempty" jsonschema:"Optional unverified source-supplied display name; distinct from the authenticated Actor and never inferred or used for contact data"`
 }
 
 type Revision struct {
@@ -65,8 +76,11 @@ type Revision struct {
 	ValidUntil  *time.Time   `json:"valid_until,omitempty"`
 	ContentHash string       `json:"content_hash"`
 	ActorID     string       `json:"actor_id"`
-	CreatedAt   time.Time    `json:"created_at"`
-	Reason      string       `json:"reason"`
+	// ActorDisplayName is the Principal's current display name. ActorID is the
+	// immutable authenticated identity for the write.
+	ActorDisplayName string    `json:"actor_display_name,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	Reason           string    `json:"reason"`
 }
 
 type Memory struct {
@@ -90,6 +104,8 @@ type MutationResult struct {
 	Written             bool                 `json:"written"`
 	Replayed            bool                 `json:"replayed"`
 	DuplicateCandidates []DuplicateCandidate `json:"duplicate_candidates,omitempty"`
+	UnfamiliarTopics    []string             `json:"unfamiliar_topics,omitempty"`
+	TopicSuggestions    []MetadataValue      `json:"existing_topic_examples,omitempty"`
 }
 
 type Hit struct {
@@ -125,7 +141,115 @@ type CatalogResult struct {
 
 type RecallResult struct {
 	Hits       []Hit  `json:"hits"`
+	TotalCount int    `json:"total_count"`
 	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+type MetadataFacet string
+
+const (
+	MetadataTopic                 MetadataFacet = "topic"
+	MetadataProvenanceClass       MetadataFacet = "provenance_class"
+	MetadataProvenanceLocator     MetadataFacet = "provenance_locator"
+	MetadataProvenanceAttribution MetadataFacet = "provenance_attribution"
+)
+
+func (f MetadataFacet) Valid() bool {
+	switch f {
+	case MetadataTopic, MetadataProvenanceClass, MetadataProvenanceLocator, MetadataProvenanceAttribution:
+		return true
+	default:
+		return false
+	}
+}
+
+type MetadataValue struct {
+	Value       string `json:"value"`
+	MemoryCount int    `json:"memory_count"`
+}
+
+type MetadataResult struct {
+	Values     []MetadataValue `json:"values"`
+	TotalCount int             `json:"total_count"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+}
+
+type MetadataQuery struct {
+	Facet     MetadataFacet
+	Query     string
+	SpaceIDs  []string
+	Statuses  []Status
+	Limit     int
+	Offset    int
+	Cursor    string
+	Principal Principal
+}
+
+type RepositoryMetadataResult struct {
+	Values     []MetadataValue
+	TotalCount int
+}
+
+type BodyWindow struct {
+	StartLine     int `json:"start_line"`
+	EndLine       int `json:"end_line"`
+	TotalLines    int `json:"total_lines"`
+	NextStartLine int `json:"next_start_line,omitempty"`
+	StartByte     int `json:"start_byte"`
+	EndByte       int `json:"end_byte"`
+	TotalBytes    int `json:"total_bytes"`
+	NextStartByte int `json:"next_start_byte,omitempty"`
+}
+
+type BodyMatch struct {
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+type ProvenancePreview struct {
+	Class            string `json:"class"`
+	Locator          string `json:"locator,omitempty"`
+	LocatorTruncated bool   `json:"locator_truncated,omitempty"`
+	Attribution      string `json:"attribution,omitempty"`
+}
+
+type ReadQuery struct {
+	Principal    Principal
+	MemoryID     string
+	StartLine    int
+	LineCount    int
+	StartByte    int
+	MaxBytes     int
+	Pattern      string
+	ContextLines int
+	MaxMatches   int
+}
+
+type ReadSegmentResult struct {
+	MemoryID           string              `json:"memory_id"`
+	SpaceID            string              `json:"space_id"`
+	Status             Status              `json:"status"`
+	Revision           int                 `json:"revision"`
+	Title              string              `json:"title"`
+	Kind               Kind                `json:"kind"`
+	ActorID            string              `json:"actor_id"`
+	ActorDisplayName   string              `json:"actor_display_name,omitempty"`
+	RevisionCreatedAt  time.Time           `json:"revision_created_at"`
+	Topics             []string            `json:"topics,omitempty"`
+	OmittedTopics      int                 `json:"omitted_topics,omitempty"`
+	Provenance         []ProvenancePreview `json:"provenance,omitempty"`
+	OmittedProvenance  int                 `json:"omitted_provenance,omitempty"`
+	ValidUntil         *time.Time          `json:"valid_until,omitempty"`
+	Reason             string              `json:"reason"`
+	Content            string              `json:"content,omitempty"`
+	Window             *BodyWindow         `json:"body_window,omitempty"`
+	Matches            []BodyMatch         `json:"matches,omitempty"`
+	TotalMatchGroups   int                 `json:"total_match_groups,omitempty"`
+	OmittedMatchGroups int                 `json:"omitted_match_groups,omitempty"`
+	NextMatchStartLine int                 `json:"next_match_start_line,omitempty"`
+	NextMatchStartByte int                 `json:"next_match_start_byte,omitempty"`
 }
 
 // BrowseItem is the compact representation used by the human-facing memory
@@ -143,10 +267,36 @@ type BrowseItem struct {
 
 type BrowseResult struct {
 	Items      []BrowseItem `json:"items"`
+	TotalCount int          `json:"total_count"`
 	NextCursor string       `json:"next_cursor,omitempty"`
 }
 
+type RepositoryBrowseResult struct {
+	Items      []BrowseItem
+	TotalCount int
+}
+
+type RepositoryRecallResult struct {
+	Hits       []Hit
+	TotalCount int
+}
+
+type MemoryFilters struct {
+	Statuses               []Status
+	Revision               *int
+	ProvenanceClasses      []string
+	ProvenanceLocators     []string
+	ProvenanceAttributions []string
+	RememberedFrom         *time.Time
+	RememberedTo           *time.Time
+	RevisedFrom            *time.Time
+	RevisedTo              *time.Time
+	ValidFrom              *time.Time
+	ValidTo                *time.Time
+}
+
 type BrowseQuery struct {
+	MemoryFilters
 	SpaceIDs        []string
 	Kinds           []Kind
 	Topics          []string
@@ -158,6 +308,7 @@ type BrowseQuery struct {
 }
 
 type RecallQuery struct {
+	MemoryFilters
 	Query           string
 	SpaceIDs        []string
 	WorkspaceClaims []WorkspaceClaim

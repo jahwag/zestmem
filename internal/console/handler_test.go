@@ -19,6 +19,7 @@ type fakeService struct {
 	read        memory.Memory
 	browseQuery memory.BrowseQuery
 	query       memory.RecallQuery
+	metadata    memory.MetadataQuery
 }
 
 func (f *fakeService) Catalog(context.Context, memory.Principal, []memory.WorkspaceClaim, ...string) (memory.CatalogResult, error) {
@@ -32,11 +33,15 @@ func (f *fakeService) RecallPage(_ context.Context, query memory.RecallQuery) (m
 	f.query = query
 	return f.recall, nil
 }
+func (f *fakeService) DiscoverMetadata(_ context.Context, query memory.MetadataQuery) (memory.MetadataResult, error) {
+	f.metadata = query
+	return memory.MetadataResult{Values: []memory.MetadataValue{{Value: "security", MemoryCount: 2}}, TotalCount: 1}, nil
+}
 
 func TestBrowseUsesAuthenticatedPrincipalAndFilters(t *testing.T) {
 	service := &fakeService{browse: memory.BrowseResult{Items: []memory.BrowseItem{{MemoryID: "m1", Title: "Recent memory"}}}}
 	handler := Handler(service, testProtect)
-	body := `{"space_ids":["s1"],"kinds":["decision"],"topics":["security"],"limit":24}`
+	body := `{"space_ids":["s1"],"kinds":["decision"],"topics":["security"],"statuses":["active"],"revision":2,"provenance_classes":["verified"],"remembered_from":"2026-07-01T00:00:00Z","limit":24}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/browse", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer test")
 	response := httptest.NewRecorder()
@@ -44,12 +49,24 @@ func TestBrowseUsesAuthenticatedPrincipalAndFilters(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
 	}
-	if service.browseQuery.Principal.ID == "" || service.browseQuery.Limit != 24 || service.browseQuery.SpaceIDs[0] != "s1" {
+	if service.browseQuery.Principal.ID == "" || service.browseQuery.Limit != 24 || service.browseQuery.SpaceIDs[0] != "s1" || *service.browseQuery.Revision != 2 || service.browseQuery.ProvenanceClasses[0] != "verified" || service.browseQuery.RememberedFrom == nil {
 		t.Fatalf("unexpected query: %#v", service.browseQuery)
 	}
 	var result memory.BrowseResult
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Items) != 1 {
 		t.Fatalf("unexpected response: %v %#v", err, result)
+	}
+}
+
+func TestMetadataDiscoveryUsesAuthenticatedPrincipal(t *testing.T) {
+	service := &fakeService{}
+	handler := Handler(service, testProtect)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/metadata", strings.NewReader(`{"facet":"topic","query":"sec","space_ids":["s1"],"limit":10}`))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || service.metadata.Principal.ID == "" || service.metadata.Facet != memory.MetadataTopic || service.metadata.Query != "sec" {
+		t.Fatalf("status=%d query=%#v body=%s", response.Code, service.metadata, response.Body.String())
 	}
 }
 func (f *fakeService) Read(context.Context, memory.Principal, string) (memory.Memory, error) {

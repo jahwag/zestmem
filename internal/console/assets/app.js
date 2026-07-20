@@ -9,10 +9,29 @@
   let mode = 'browse';
   let committedQuery = '';
   let nextCursor = '';
+  let loadedCount = 0;
+  let totalCount = 0;
   let loadGeneration = 0;
   let selectedMemory = '';
   let openFocusTimer = 0;
+  let authGeneration = 0;
+  let authController = new AbortController();
+  let committedAdvancedFilters = {statuses: ['active']};
   const $ = id => document.getElementById(id);
+  const sessionKey = 'zestmem.console.credential';
+  const metadataTimers = new Map();
+  const metadataGenerations = new Map();
+
+  function sessionCredential(value) {
+    try {
+      if (value === undefined) return sessionStorage.getItem(sessionKey) || '';
+      if (value) sessionStorage.setItem(sessionKey, value);
+      else sessionStorage.removeItem(sessionKey);
+    } catch (_) {
+      return '';
+    }
+    return value;
+  }
 
   class APIError extends Error {
     constructor(message, status) {
@@ -21,10 +40,23 @@
     }
   }
 
+  function newAuthSession() {
+    authController.abort();
+    authController = new AbortController();
+    authGeneration++;
+  }
+
+  function stale(error) {
+    return error?.name === 'AbortError';
+  }
+
   async function api(path, options = {}) {
+    const generation = authGeneration;
+    const credential = token;
     const headers = {...(options.headers || {}), Authorization: `Bearer ${token}`};
     if (options.body) headers['Content-Type'] = 'application/json';
-    const response = await fetch(path, {...options, headers, cache: 'no-store'});
+    const response = await fetch(path, {...options, headers, signal: authController.signal, cache: 'no-store'});
+    if (generation !== authGeneration || credential !== token) throw new DOMException('Stale session', 'AbortError');
     if (!response.ok) {
       const message = response.status === 401
         ? 'That credential is invalid, expired, or revoked.'
@@ -60,6 +92,60 @@
     return api(`/api/v1/catalog${suffix}`);
   }
 
+  function selectedStatuses() {
+    return $('memory-status').value === 'all' ? ['active', 'retracted'] : [$('memory-status').value || 'active'];
+  }
+
+  async function loadMetadata(facet, query = '', cursor = '') {
+    const input = {facet, query, limit: 100, statuses: selectedStatuses()};
+    if (selectedSpace) input.space_ids = [selectedSpace];
+    if (cursor) input.cursor = cursor;
+    return api('/api/v1/metadata', {method: 'POST', body: JSON.stringify(input)});
+  }
+
+  async function populateMetadata(facet, listID, metaID, query = '') {
+    const generation = (metadataGenerations.get(listID) || 0) + 1;
+    metadataGenerations.set(listID, generation);
+    try {
+      const values = [];
+      let totalCount = 0;
+      let cursor = '';
+      do {
+        const result = await loadMetadata(facet, query.trim(), cursor);
+        if (metadataGenerations.get(listID) !== generation) return;
+        values.push(...(result.values || []));
+        totalCount = result.total_count || 0;
+        cursor = result.next_cursor || '';
+      } while (cursor && values.length < 2000);
+      const list = $(listID);
+      list.replaceChildren();
+      for (const item of values) {
+        const option = new Option(item.value, item.value);
+        option.label = `${item.value} · ${item.memory_count}`;
+        list.append(option);
+      }
+      $(metaID).textContent = `${values.length} of ${totalCount} matching values shown${cursor ? '; type to narrow' : ''}.`;
+    } catch (error) {
+      if (stale(error)) return;
+      if (error.status === 401) lock();
+    }
+  }
+
+  function scheduleMetadata(inputID, facet, listID, metaID) {
+    const prior = metadataTimers.get(inputID);
+    if (prior) clearTimeout(prior);
+    metadataTimers.set(inputID, setTimeout(() => populateMetadata(facet, listID, metaID, $(inputID).value), 180));
+  }
+
+  function refreshMetadata() {
+    return Promise.all([
+      populateMetadata('topic', 'topic-values', 'topic-meta', $('topic').value),
+      populateMetadata('provenance_class', 'provenance-class-values', 'provenance-class-meta', $('provenance-class').value),
+      populateMetadata('provenance_locator', 'provenance-locator-values', 'provenance-locator-meta', $('provenance-locator').value),
+      populateMetadata('provenance_attribution', 'provenance-attribution-values', 'provenance-attribution-meta', $('provenance-attribution').value)
+    ]);
+  }
+
   function renderSpaces() {
     const nav = $('spaces');
     nav.replaceChildren();
@@ -84,12 +170,6 @@
       ? `${spaces.length} of ${catalogTotal} readable Spaces`
       : `${spaces.length} readable ${spaces.length === 1 ? 'Space' : 'Spaces'}`;
     $('load-spaces').hidden = !catalogCursor;
-    const topics = [...new Set(spaces.flatMap(space => space.topics || []))].sort((a, b) => a.localeCompare(b));
-    const topic = $('topic');
-    const selectedTopic = topic.value;
-    topic.replaceChildren(new Option('All topics', ''));
-    for (const value of topics) topic.append(new Option(value, value));
-    if (topics.includes(selectedTopic)) topic.value = selectedTopic;
     document.querySelectorAll('.space-name[data-space-id]').forEach(label => {
       label.textContent = spaceName(label.dataset.spaceId);
     });
@@ -105,6 +185,7 @@
       item.setAttribute('aria-pressed', String(active));
     });
     closeSidebar();
+    refreshMetadata();
     loadResults(false);
   }
 
@@ -112,9 +193,53 @@
     const input = {limit: 20};
     if (selectedSpace) input.space_ids = [selectedSpace];
     if ($('kind').value) input.kinds = [$('kind').value];
-    if ($('topic').value) input.topics = [$('topic').value];
+    if ($('topic').value.trim()) input.topics = [$('topic').value.trim()];
+    Object.assign(input, committedAdvancedFilters);
     if (cursor) input.cursor = cursor;
     return input;
+  }
+
+  function readAdvancedFilters() {
+    const input = {statuses: selectedStatuses()};
+    const revision = $('revision').valueAsNumber;
+    if (Number.isInteger(revision) && revision > 0) input.revision = revision;
+    if ($('provenance-class').value.trim()) input.provenance_classes = [$('provenance-class').value.trim()];
+    if ($('provenance-locator').value) input.provenance_locators = [$('provenance-locator').value];
+    if ($('provenance-attribution').value) input.provenance_attributions = [$('provenance-attribution').value];
+    for (const [id, field, end] of [
+      ['remembered-from', 'remembered_from', false], ['remembered-to', 'remembered_to', true],
+      ['revised-from', 'revised_from', false], ['revised-to', 'revised_to', true],
+      ['valid-from', 'valid_from', false], ['valid-to', 'valid_to', true]
+    ]) {
+      const value = $(id).value;
+      if (value) {
+        const date = new Date(`${value}T00:00:00`);
+        if (end) date.setDate(date.getDate() + 1);
+        input[field] = date.toISOString();
+      }
+    }
+    return input;
+  }
+
+  function validateDateRanges() {
+    let valid = true;
+    for (const [fromID, toID] of [['remembered-from', 'remembered-to'], ['revised-from', 'revised-to'], ['valid-from', 'valid-to']]) {
+      const from = $(fromID);
+      const to = $(toID);
+      to.setCustomValidity(from.value && to.value && from.value > to.value ? 'The To date must be on or after the From date.' : '');
+      valid = to.checkValidity() && valid;
+    }
+    return valid;
+  }
+
+  function matchingDescription() {
+    const statuses = committedAdvancedFilters.statuses || ['active'];
+    const parts = [statuses.length > 1 ? 'active and retracted' : statuses[0]];
+    if ($('kind').value) parts.push($('kind').value);
+    if ($('topic').value.trim()) parts.push(`topic “${$('topic').value.trim()}”`);
+    if (mode === 'search') parts.push('search');
+    if (Object.keys(committedAdvancedFilters).some(key => key !== 'statuses')) parts.push('advanced filters');
+    return parts.join(', ');
   }
 
   function currentQuery() {
@@ -126,10 +251,10 @@
     if (mode === 'search') {
       input.query = committedQuery;
       const result = await api('/api/v1/recall', {method: 'POST', body: JSON.stringify(input)});
-      return {items: result.hits || [], cursor: result.next_cursor || ''};
+      return {items: result.hits || [], cursor: result.next_cursor || '', totalCount: result.total_count || 0};
     }
     const result = await api('/api/v1/browse', {method: 'POST', body: JSON.stringify(input)});
-    return {items: result.items || [], cursor: result.next_cursor || ''};
+    return {items: result.items || [], cursor: result.next_cursor || '', totalCount: result.total_count || 0};
   }
 
   async function loadResults(append) {
@@ -137,6 +262,8 @@
     const cursor = append ? nextCursor : '';
     if (!append) {
       selectedMemory = '';
+      loadedCount = 0;
+      totalCount = 0;
       $('results').replaceChildren();
       showMemoryPlaceholder();
     }
@@ -146,14 +273,19 @@
       const page = await requestPage(cursor);
       if (generation !== loadGeneration) return;
       renderResults(page.items, append);
+      loadedCount = append ? loadedCount + page.items.length : page.items.length;
+      totalCount = Number.isInteger(page.totalCount) ? page.totalCount : loadedCount;
       nextCursor = page.cursor;
       $('load-more').hidden = !nextCursor;
       $('result-kicker').textContent = mode === 'search' ? 'Ranked by relevance' : 'Newest first';
       $('results-title').textContent = mode === 'search' ? 'Search results' : 'Memories';
       const scope = selectedSpace ? ` in ${spaceName(selectedSpace)}` : '';
-      $('status').textContent = `${page.items.length}${append ? ' more' : ''} ${page.items.length === 1 ? 'memory' : 'memories'}${scope}`;
+      $('status').textContent = mode === 'search'
+        ? `${loadedCount} of ${totalCount} bounded ranked ${totalCount === 1 ? 'candidate' : 'candidates'} loaded (${matchingDescription()})${scope}`
+        : `${loadedCount} of ${totalCount} matching ${matchingDescription()} ${totalCount === 1 ? 'memory' : 'memories'} loaded${scope}`;
     } catch (error) {
       if (generation !== loadGeneration) return;
+      if (stale(error)) return;
       handleError(error, $('status'));
     } finally {
       if (generation === loadGeneration) setBusy(false);
@@ -206,6 +338,7 @@
       renderMemory(memory);
     } catch (error) {
       if (selectedMemory !== id) return;
+      if (stale(error)) return;
       handleError(error, article);
     }
   }
@@ -219,7 +352,9 @@
     const detailSpace = element('span', 'space-name', spaceName(memory.space_id));
     detailSpace.dataset.spaceId = memory.space_id;
     meta.append(element('span', `kind kind-${revision.kind}`, revision.kind), element('span', '', `Revision ${revision.number}`), detailSpace);
-    heading.append(meta, element('h2', '', revision.title));
+    const title = element('h2', '', revision.title);
+    title.tabIndex = -1;
+    heading.append(meta, title);
     const topics = element('div', 'topics');
     for (const topic of revision.topics || []) topics.append(element('span', '', topic));
     heading.append(topics);
@@ -228,6 +363,8 @@
     const facts = element('dl', 'memory-facts');
     addFact(facts, 'Remembered', formatDate(memory.created_at));
     addFact(facts, 'Revision made', formatDate(revision.created_at));
+    addFact(facts, 'Current actor display name', revision.actor_display_name || 'Not set');
+    addFact(facts, 'Authenticated actor ID', revision.actor_id || 'Unknown Principal');
     addFact(facts, 'Valid until', revision.valid_until ? formatDate(revision.valid_until) : 'No expiry');
     addFact(facts, 'Status', memory.status);
     article.append(facts);
@@ -242,13 +379,15 @@
     if (!sources.length) provenance.append(element('p', 'muted', 'No provenance recorded.'));
     for (const source of sources) {
       const row = element('div', 'source');
-      row.append(element('strong', '', source.class), element('span', '', source.locator || 'No locator'));
+      const detail = element('span', '', source.locator || 'No locator');
+      if (source.attribution) detail.append(document.createElement('br'), element('em', '', `Claimed source attribution: ${source.attribution}`));
+      row.append(element('strong', '', source.class.replaceAll('_', ' ')), detail);
       provenance.append(row);
     }
     article.append(provenance);
+    $('detail-status').textContent = `Memory loaded: ${revision.title}`;
     if (window.matchMedia('(max-width: 760px)').matches) {
-      article.tabIndex = -1;
-      article.focus({preventScroll: true});
+      title.focus({preventScroll: true});
       article.scrollIntoView({behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
     }
   }
@@ -268,8 +407,10 @@
 
   function setBusy(busy) {
     $('load-more').disabled = busy;
-    $('kind').disabled = busy;
-    $('topic').disabled = busy;
+    for (const id of ['kind', 'topic', 'memory-status', 'revision', 'provenance-class', 'provenance-locator',
+      'provenance-attribution', 'remembered-from', 'remembered-to', 'revised-from', 'revised-to', 'valid-from', 'valid-to', 'apply-filters']) {
+      $(id).disabled = busy;
+    }
   }
 
   function handleError(error, target) {
@@ -291,6 +432,7 @@
     document.querySelector('.brand').inert = true;
     $('connection').inert = true;
     window.clearTimeout(openFocusTimer);
+    $('close-sidebar').focus();
     openFocusTimer = window.setTimeout(() => $('close-sidebar').focus(), 200);
   }
 
@@ -308,8 +450,20 @@
     if (wasOpen && restoreFocus) $('open-sidebar').focus();
   }
 
+  function clearFilterValues() {
+    $('kind').value = '';
+    $('topic').value = '';
+    $('memory-status').value = 'active';
+    for (const id of ['revision', 'provenance-class', 'provenance-locator', 'provenance-attribution',
+      'remembered-from', 'remembered-to', 'revised-from', 'revised-to', 'valid-from', 'valid-to']) {
+      $(id).value = '';
+    }
+  }
+
   function lock() {
+    newAuthSession();
     token = '';
+    sessionCredential('');
     spaces = [];
     catalogCursor = '';
     catalogTotal = 0;
@@ -319,15 +473,23 @@
     selectedMemory = '';
     nextCursor = '';
     loadGeneration++;
+    for (const timer of metadataTimers.values()) clearTimeout(timer);
+    metadataTimers.clear();
+    metadataGenerations.clear();
     $('token').value = '';
     $('query').value = '';
     $('clear-search').hidden = true;
-    $('kind').value = '';
-    $('topic').value = '';
+    clearFilterValues();
+    committedAdvancedFilters = {statuses: ['active']};
+    $('keep-session').checked = false;
     $('workspace').hidden = true;
     $('connection').hidden = true;
     $('login').hidden = false;
     $('results').replaceChildren();
+    $('spaces').replaceChildren();
+    showMemoryPlaceholder();
+    for (const id of ['topic-values', 'provenance-class-values', 'provenance-locator-values', 'provenance-attribution-values']) $(id).replaceChildren();
+    for (const id of ['topic-meta', 'provenance-class-meta', 'provenance-locator-meta', 'provenance-attribution-meta', 'status', 'detail-status', 'space-count']) $(id).textContent = '';
     closeSidebar(false);
     $('token').focus();
   }
@@ -335,6 +497,7 @@
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault();
     token = $('token').value.trim();
+    newAuthSession();
     $('login-error').textContent = '';
     const submit = event.submitter;
     submit.disabled = true;
@@ -344,6 +507,7 @@
       spaces = catalog.spaces || [];
       catalogCursor = catalog.next_cursor || '';
       catalogTotal = spaces.length + (catalog.omitted_count || 0);
+      sessionCredential($('keep-session').checked ? token : '');
       $('token').value = '';
       renderSpaces();
       $('login').hidden = true;
@@ -351,10 +515,13 @@
       $('connection').hidden = false;
       mode = 'browse';
       committedQuery = '';
+      await refreshMetadata();
       await loadResults(false);
       $('query').focus();
     } catch (error) {
+      if (stale(error)) return;
       token = '';
+      sessionCredential('');
       $('login-error').textContent = error.message;
       $('token').focus();
     } finally {
@@ -380,6 +547,33 @@
   });
   $('kind').addEventListener('change', () => loadResults(false));
   $('topic').addEventListener('change', () => loadResults(false));
+  $('topic').addEventListener('input', () => scheduleMetadata('topic', 'topic', 'topic-values', 'topic-meta'));
+  $('provenance-class').addEventListener('input', () => scheduleMetadata('provenance-class', 'provenance_class', 'provenance-class-values', 'provenance-class-meta'));
+  $('provenance-locator').addEventListener('input', () => scheduleMetadata('provenance-locator', 'provenance_locator', 'provenance-locator-values', 'provenance-locator-meta'));
+  $('provenance-attribution').addEventListener('input', () => scheduleMetadata('provenance-attribution', 'provenance_attribution', 'provenance-attribution-values', 'provenance-attribution-meta'));
+  $('toggle-filters').addEventListener('click', event => {
+    const expanded = $('advanced-filters').hidden;
+    $('advanced-filters').hidden = !expanded;
+    event.currentTarget.setAttribute('aria-expanded', String(expanded));
+    event.currentTarget.textContent = expanded ? 'Fewer filters' : 'More filters';
+  });
+  $('advanced-filters').addEventListener('submit', event => {
+    event.preventDefault();
+    if (!validateDateRanges() || !event.currentTarget.checkValidity()) {
+      event.currentTarget.reportValidity();
+      return;
+    }
+    committedAdvancedFilters = readAdvancedFilters();
+    refreshMetadata();
+    loadResults(false);
+  });
+  $('memory-status').addEventListener('change', refreshMetadata);
+  $('clear-filters').addEventListener('click', () => {
+    clearFilterValues();
+    committedAdvancedFilters = readAdvancedFilters();
+    refreshMetadata();
+    loadResults(false);
+  });
   $('load-more').addEventListener('click', () => loadResults(true));
   $('load-spaces').addEventListener('click', async event => {
     const button = event.currentTarget;
@@ -391,6 +585,7 @@
       catalogCursor = catalog.next_cursor || '';
       renderSpaces();
     } catch (error) {
+      if (stale(error)) return;
       handleError(error, $('space-count'));
     } finally {
       button.disabled = false;
@@ -414,4 +609,10 @@
   drawerBreakpoint.addEventListener('change', normalizeDrawer);
   window.addEventListener('resize', normalizeDrawer);
   new ResizeObserver(normalizeDrawer).observe(document.documentElement);
+  const savedCredential = sessionCredential();
+  if (savedCredential) {
+    $('keep-session').checked = true;
+    $('token').value = savedCredential;
+    $('login-form').requestSubmit();
+  }
 })();

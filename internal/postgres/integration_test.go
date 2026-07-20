@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/bytelope/zestmem/internal/postgres"
@@ -69,10 +70,13 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
-	cmd := memory.RememberCommand{Principal: memory.Principal{ID: agent}, SpaceID: project, Title: "Connection pool", Body: "Use a maximum of twenty database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Reason: "operational limit", IdempotencyKey: "create-1"}
+	cmd := memory.RememberCommand{Principal: memory.Principal{ID: agent}, SpaceID: project, Title: "Connection pool", Body: "Use a maximum of twenty database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: []memory.Provenance{{Class: "user_instruction", Locator: "conversation", Attribution: "User One"}}, Reason: "operational limit", IdempotencyKey: "create-1", ConfirmNewTopics: []string{"postgres"}}
 	created, err := svc.Remember(ctx, cmd)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if created.Memory.CurrentRevision.ActorDisplayName != "agent" || created.Memory.CurrentRevision.Provenance[0].Attribution != "User One" {
+		t.Fatalf("attribution=%#v actor=%q", created.Memory.CurrentRevision.Provenance, created.Memory.CurrentRevision.ActorDisplayName)
 	}
 	if err := store.VerifyEmbeddingFingerprint(ctx); err != nil {
 		t.Fatalf("valid active embedding fingerprint rejected: %v", err)
@@ -97,9 +101,10 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if len(hits) != 1 || hits[0].MemoryID != created.Memory.ID {
 		t.Fatalf("hits=%#v", hits)
 	}
+	validUntil := time.Now().UTC().Add(48 * time.Hour)
 	second, err := svc.Remember(ctx, memory.RememberCommand{
 		Principal: cmd.Principal, SpaceID: project, Title: "Deployment channel", Body: "Use the stable release channel.",
-		Kind: memory.KindFact, Topics: []string{"release"}, Reason: "document deployment", IdempotencyKey: "create-2", DuplicateResolution: "create_distinct",
+		Kind: memory.KindFact, Topics: []string{"release"}, ValidUntil: &validUntil, Reason: "document deployment", IdempotencyKey: "create-2", DuplicateResolution: "create_distinct", ConfirmNewTopics: []string{"release"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,15 +120,63 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 		t.Fatalf("browse=%#v", browsed)
 	}
 	firstPage, err := svc.BrowsePage(ctx, memory.BrowseQuery{Principal: cmd.Principal, SpaceIDs: []string{project}, Limit: 1})
-	if err != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == "" {
+	if err != nil || len(firstPage.Items) != 1 || firstPage.TotalCount != 2 || firstPage.NextCursor == "" {
 		t.Fatalf("first browse page=%#v err=%v", firstPage, err)
 	}
 	secondPage, err := svc.BrowsePage(ctx, memory.BrowseQuery{Principal: cmd.Principal, SpaceIDs: []string{project}, Limit: 1, Cursor: firstPage.NextCursor})
-	if err != nil || len(secondPage.Items) != 1 || secondPage.NextCursor != "" || secondPage.Items[0].MemoryID == firstPage.Items[0].MemoryID {
+	if err != nil || len(secondPage.Items) != 1 || secondPage.TotalCount != 2 || secondPage.NextCursor != "" || secondPage.Items[0].MemoryID == firstPage.Items[0].MemoryID {
 		t.Fatalf("second browse page=%#v err=%v", secondPage, err)
 	}
 	if firstPage.Items[0].MemoryID != second.Memory.ID && secondPage.Items[0].MemoryID != second.Memory.ID {
 		t.Fatal("second memory missing from browse pages")
+	}
+	topics, err := svc.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataTopic, Principal: cmd.Principal, SpaceIDs: []string{project}, Limit: 1})
+	if err != nil || topics.TotalCount != 2 || len(topics.Values) != 1 || topics.NextCursor == "" {
+		t.Fatalf("topics=%#v err=%v", topics, err)
+	}
+	attributions, err := svc.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataProvenanceAttribution, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || attributions.TotalCount != 1 || attributions.Values[0].Value != "User One" {
+		t.Fatalf("attributions=%#v err=%v", attributions, err)
+	}
+	filtered, err := svc.BrowsePage(ctx, memory.BrowseQuery{MemoryFilters: memory.MemoryFilters{Revision: func() *int { value := 1; return &value }(), ProvenanceAttributions: []string{"User One"}, RememberedFrom: &created.Memory.CreatedAt}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || filtered.TotalCount != 1 || filtered.Items[0].MemoryID != created.Memory.ID {
+		t.Fatalf("filtered=%#v err=%v", filtered, err)
+	}
+	revisedFrom := second.Memory.CurrentRevision.CreatedAt.Add(-time.Second)
+	revisedTo := second.Memory.CurrentRevision.CreatedAt.Add(time.Second)
+	validFrom := validUntil.Add(-time.Second)
+	validTo := validUntil.Add(time.Second)
+	spans, err := svc.BrowsePage(ctx, memory.BrowseQuery{MemoryFilters: memory.MemoryFilters{RevisedFrom: &revisedFrom, RevisedTo: &revisedTo, ValidFrom: &validFrom, ValidTo: &validTo}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || spans.TotalCount != 1 || spans.Items[0].MemoryID != second.Memory.ID {
+		t.Fatalf("date spans=%#v err=%v", spans, err)
+	}
+	mixed, err := svc.Remember(ctx, memory.RememberCommand{
+		Principal: cmd.Principal, SpaceID: project, Title: "Mixed source provenance", Body: "A source-pairing filter regression fixture.",
+		Kind: memory.KindFact, Topics: []string{"release"}, Reason: "test provenance pairs", IdempotencyKey: "create-3", DuplicateResolution: "create_distinct",
+		Provenance: []memory.Provenance{{Class: "User_Instruction", Locator: "conversation", Attribution: "Bob"}, {Class: "web", Locator: "https://example.test", Attribution: "Alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyClass, err := svc.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataProvenanceClass, Query: "user_", Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || legacyClass.TotalCount != 1 || legacyClass.Values[0].Value != "user_instruction" {
+		t.Fatalf("normalized provenance discovery=%#v err=%v", legacyClass, err)
+	}
+	wildcard, err := svc.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataProvenanceClass, Query: "%", Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || wildcard.TotalCount != 0 {
+		t.Fatalf("wildcard metadata query=%#v err=%v", wildcard, err)
+	}
+	paired, err := svc.BrowsePage(ctx, memory.BrowseQuery{MemoryFilters: memory.MemoryFilters{ProvenanceClasses: []string{"user_instruction"}, ProvenanceAttributions: []string{"Alice"}}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || paired.TotalCount != 0 {
+		t.Fatalf("cross-entry provenance false positive=%#v err=%v", paired, err)
+	}
+	paired, err = svc.BrowsePage(ctx, memory.BrowseQuery{MemoryFilters: memory.MemoryFilters{ProvenanceClasses: []string{" USER_Instruction "}, ProvenanceLocators: []string{"conversation"}, ProvenanceAttributions: []string{"Bob"}}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || paired.TotalCount != 1 || paired.Items[0].MemoryID != mixed.Memory.ID {
+		t.Fatalf("same-entry normalized provenance=%#v err=%v", paired, err)
+	}
+	filteredRecall, err := svc.RecallPage(ctx, memory.RecallQuery{MemoryFilters: memory.MemoryFilters{ProvenanceClasses: []string{"user_instruction"}, ProvenanceAttributions: []string{"Alice"}}, Principal: cmd.Principal, SpaceIDs: []string{project}, Query: "source pairing regression"})
+	if err != nil || filteredRecall.TotalCount != 0 {
+		t.Fatalf("filtered recall cross-entry false positive=%#v err=%v", filteredRecall, err)
 	}
 	_, err = svc.Read(ctx, memory.Principal{ID: other}, created.Memory.ID)
 	if err != nil {
@@ -163,14 +216,14 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if revised.Memory.CurrentRevision.Number != 2 {
 		t.Fatal("revision did not advance")
 	}
-	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +257,14 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	}
 	if _, err = svc.Read(ctx, cmd.Principal, created.Memory.ID); err != nil {
 		t.Fatalf("maintainer could not inspect retracted memory: %v", err)
+	}
+	retracted, err := svc.BrowsePage(ctx, memory.BrowseQuery{MemoryFilters: memory.MemoryFilters{Statuses: []memory.Status{memory.StatusRetracted}}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || retracted.TotalCount != 1 || retracted.Items[0].MemoryID != created.Memory.ID {
+		t.Fatalf("retracted browse=%#v err=%v", retracted, err)
+	}
+	retractedAttribution, err := svc.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataProvenanceAttribution, Query: "User One", Statuses: []memory.Status{memory.StatusRetracted}, Principal: cmd.Principal, SpaceIDs: []string{project}})
+	if err != nil || retractedAttribution.TotalCount != 1 {
+		t.Fatalf("retracted provenance discovery=%#v err=%v", retractedAttribution, err)
 	}
 	hits, err = svc.Recall(ctx, memory.RecallQuery{Principal: cmd.Principal, Query: "database connection maximum"})
 	if err != nil {

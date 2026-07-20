@@ -14,7 +14,7 @@ import (
 
 const memoryColumns = `m.id::text, m.space_id::text, m.status::text, m.created_at,
  r.revision, r.title, r.body, r.kind::text, r.topics, r.provenance, r.valid_until,
- r.content_hash, r.actor_id::text, r.created_at, r.reason`
+ r.content_hash, r.actor_id::text, (SELECT display_name FROM principals WHERE id=r.actor_id), r.created_at, r.reason`
 
 type Fingerprint struct {
 	Provider, Model, ModelRevision, Normalization, QueryPrefix, DocumentPrefix string
@@ -264,7 +264,7 @@ func scanMemory(row rowScanner) (memory.Memory, error) {
 	err := row.Scan(&mem.ID, &mem.SpaceID, &status, &mem.CreatedAt,
 		&mem.CurrentRevision.Number, &mem.CurrentRevision.Title, &mem.CurrentRevision.Body, &kind,
 		&mem.CurrentRevision.Topics, &provenanceJSON, &mem.CurrentRevision.ValidUntil,
-		&mem.CurrentRevision.ContentHash, &mem.CurrentRevision.ActorID, &mem.CurrentRevision.CreatedAt, &mem.CurrentRevision.Reason)
+		&mem.CurrentRevision.ContentHash, &mem.CurrentRevision.ActorID, &mem.CurrentRevision.ActorDisplayName, &mem.CurrentRevision.CreatedAt, &mem.CurrentRevision.Reason)
 	if err != nil {
 		return memory.Memory{}, err
 	}
@@ -284,10 +284,14 @@ func mapConflict(err error) error {
 	return err
 }
 
-func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) ([]memory.BrowseItem, error) {
+func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) (memory.RepositoryBrowseResult, error) {
 	kinds := make([]string, len(q.Kinds))
 	for i := range q.Kinds {
 		kinds[i] = string(q.Kinds[i])
+	}
+	statuses := make([]string, len(q.Statuses))
+	for i := range q.Statuses {
+		statuses[i] = string(q.Statuses[i])
 	}
 	var beforeUpdatedAt, beforeMemoryID any
 	if q.BeforeUpdatedAt != nil {
@@ -295,39 +299,60 @@ func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) ([]memory.Brow
 		beforeMemoryID = q.BeforeMemoryID
 	}
 	rows, err := s.pool.Query(ctx, `
- SELECT m.id::text,m.space_id::text,r.title,r.kind::text,r.topics,
+ WITH eligible AS (
+ SELECT m.id,m.space_id,r.title,r.kind,r.topics,
    CASE WHEN length(regexp_replace(r.body,'\\s+',' ','g'))>280
      THEN left(regexp_replace(r.body,'\\s+',' ','g'),279)||'…'
-     ELSE regexp_replace(r.body,'\\s+',' ','g') END,
-   m.current_revision,r.created_at
+     ELSE regexp_replace(r.body,'\\s+',' ','g') END AS excerpt,
+   m.current_revision,r.created_at updated_at
  FROM memories m JOIN memory_revisions r
    ON r.memory_id=m.id AND r.revision=m.current_revision
- WHERE m.space_id=ANY($1::uuid[]) AND can_read_space($4,m.space_id)
-   AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
+ WHERE m.space_id=ANY($1::uuid[])
+   AND ((m.status='active' AND can_read_space($4,m.space_id)) OR
+        (m.status<>'active' AND has_direct_space_role($4,m.space_id,'maintainer')))
+   AND m.status::text=ANY($8::text[])
+   AND (m.status<>'active' OR r.valid_until IS NULL OR r.valid_until>now())
    AND (coalesce(cardinality($2::text[]),0)=0 OR r.kind::text=ANY($2::text[]))
    AND (coalesce(cardinality($3::text[]),0)=0 OR r.topics && $3::text[])
-   AND ($5::timestamptz IS NULL OR (r.created_at,m.id) < ($5::timestamptz,$6::uuid))
- ORDER BY r.created_at DESC,m.id DESC LIMIT $7`,
-		q.SpaceIDs, kinds, q.Topics, q.Principal.ID, beforeUpdatedAt, beforeMemoryID, q.Limit)
+   AND ($9::integer IS NULL OR r.revision=$9)
+	 AND ((coalesce(cardinality($10::text[]),0)=0 AND coalesce(cardinality($11::text[]),0)=0 AND coalesce(cardinality($12::text[]),0)=0)
+	   OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.provenance) p WHERE
+	     (coalesce(cardinality($10::text[]),0)=0 OR lower(regexp_replace(btrim(p->>'class'),'\s+',' ','g'))=ANY($10::text[]))
+	     AND (coalesce(cardinality($11::text[]),0)=0 OR p->>'locator'=ANY($11::text[]))
+	     AND (coalesce(cardinality($12::text[]),0)=0 OR p->>'attribution'=ANY($12::text[]))))
+   AND ($13::timestamptz IS NULL OR m.created_at >= $13) AND ($14::timestamptz IS NULL OR m.created_at < $14)
+   AND ($15::timestamptz IS NULL OR r.created_at >= $15) AND ($16::timestamptz IS NULL OR r.created_at < $16)
+   AND ($17::timestamptz IS NULL OR r.valid_until >= $17) AND ($18::timestamptz IS NULL OR r.valid_until < $18)
+ ), counted AS (
+   SELECT eligible.*,count(*) OVER()::integer total_count FROM eligible
+ )
+ SELECT id::text,space_id::text,title,kind::text,topics,
+   excerpt,current_revision,updated_at,total_count FROM counted
+ WHERE ($5::timestamptz IS NULL OR (updated_at,id) < ($5::timestamptz,$6::uuid))
+ ORDER BY updated_at DESC,id DESC LIMIT $7`,
+		q.SpaceIDs, kinds, q.Topics, q.Principal.ID, beforeUpdatedAt, beforeMemoryID, q.Limit,
+		statuses, q.Revision, q.ProvenanceClasses, q.ProvenanceLocators, q.ProvenanceAttributions,
+		q.RememberedFrom, q.RememberedTo, q.RevisedFrom, q.RevisedTo, q.ValidFrom, q.ValidTo)
 	if err != nil {
-		return nil, err
+		return memory.RepositoryBrowseResult{}, err
 	}
 	defer rows.Close()
 	var out []memory.BrowseItem
+	total := 0
 	for rows.Next() {
 		var item memory.BrowseItem
 		var kind string
 		if err := rows.Scan(&item.MemoryID, &item.SpaceID, &item.Title, &kind, &item.Topics,
-			&item.Excerpt, &item.Revision, &item.UpdatedAt); err != nil {
-			return nil, err
+			&item.Excerpt, &item.Revision, &item.UpdatedAt, &total); err != nil {
+			return memory.RepositoryBrowseResult{}, err
 		}
 		item.Kind = memory.Kind(kind)
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	return memory.RepositoryBrowseResult{Items: out, TotalCount: total}, rows.Err()
 }
 
-func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) ([]memory.Hit, error) {
+func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) (memory.RepositoryRecallResult, error) {
 	kinds := make([]string, len(q.Kinds))
 	for i := range q.Kinds {
 		kinds[i] = string(q.Kinds[i])
@@ -336,15 +361,31 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) ([]memory.Hit,
 	if len(q.Embedding) == 384 {
 		vector = pgvector.NewVector(q.Embedding)
 	}
+	statuses := make([]string, len(q.Statuses))
+	for i := range q.Statuses {
+		statuses[i] = string(q.Statuses[i])
+	}
 	rows, err := s.pool.Query(ctx, `
  WITH eligible AS (
    SELECT m.id,m.space_id,m.current_revision,r.title,r.body,r.kind,r.topics,r.provenance,r.search_document,e.embedding
    FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
    LEFT JOIN memory_embeddings e ON e.memory_id=r.memory_id AND e.revision=r.revision
-	 WHERE m.space_id=ANY($2::uuid[]) AND can_read_space($8,m.space_id)
-	   AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now())
+	 WHERE m.space_id=ANY($2::uuid[])
+	   AND ((m.status='active' AND can_read_space($8,m.space_id)) OR
+	        (m.status<>'active' AND has_direct_space_role($8,m.space_id,'maintainer')))
+	   AND m.status::text=ANY($9::text[])
+	   AND (m.status<>'active' OR r.valid_until IS NULL OR r.valid_until>now())
      AND (coalesce(cardinality($3::text[]),0)=0 OR r.kind::text=ANY($3::text[]))
      AND (coalesce(cardinality($4::text[]),0)=0 OR r.topics && $4::text[])
+	   AND ($10::integer IS NULL OR r.revision=$10)
+	   AND ((coalesce(cardinality($11::text[]),0)=0 AND coalesce(cardinality($12::text[]),0)=0 AND coalesce(cardinality($13::text[]),0)=0)
+	     OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.provenance) p WHERE
+	       (coalesce(cardinality($11::text[]),0)=0 OR lower(regexp_replace(btrim(p->>'class'),'\s+',' ','g'))=ANY($11::text[]))
+	       AND (coalesce(cardinality($12::text[]),0)=0 OR p->>'locator'=ANY($12::text[]))
+	       AND (coalesce(cardinality($13::text[]),0)=0 OR p->>'attribution'=ANY($13::text[]))))
+	   AND ($14::timestamptz IS NULL OR m.created_at >= $14) AND ($15::timestamptz IS NULL OR m.created_at < $15)
+	   AND ($16::timestamptz IS NULL OR r.created_at >= $16) AND ($17::timestamptz IS NULL OR r.created_at < $17)
+	   AND ($18::timestamptz IS NULL OR r.valid_until >= $18) AND ($19::timestamptz IS NULL OR r.valid_until < $19)
  ), keyword AS (
    SELECT id,row_number() OVER(ORDER BY ts_rank_cd(search_document,websearch_to_tsquery('english',$1)) DESC,id) rank
    FROM eligible WHERE search_document @@ websearch_to_tsquery('english',$1) LIMIT 100
@@ -359,23 +400,26 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) ([]memory.Hit,
  SELECT id::text,space_id::text,title,kind::text,topics[1:6],CASE WHEN length(regexp_replace(body,'\\s+',' ','g'))<=400
    THEN left(regexp_replace(body,'\\s+',' ','g'),greatest(length(regexp_replace(body,'\\s+',' ','g'))-1,0))||'…'
    ELSE left(regexp_replace(body,'\\s+',' ','g'),399)||'…' END,
- current_revision,score,coalesce(provenance->0->>'class','unverified')
- FROM ranked ORDER BY score DESC,id LIMIT $6 OFFSET $7`, q.Query, q.SpaceIDs, kinds, q.Topics, vector, q.Limit, q.Offset, q.Principal.ID)
+ current_revision,score,coalesce(provenance->0->>'class','unverified'),count(*) OVER()::integer
+ FROM ranked ORDER BY score DESC,id LIMIT $6 OFFSET $7`, q.Query, q.SpaceIDs, kinds, q.Topics, vector, q.Limit, q.Offset, q.Principal.ID,
+		statuses, q.Revision, q.ProvenanceClasses, q.ProvenanceLocators, q.ProvenanceAttributions,
+		q.RememberedFrom, q.RememberedTo, q.RevisedFrom, q.RevisedTo, q.ValidFrom, q.ValidTo)
 	if err != nil {
-		return nil, err
+		return memory.RepositoryRecallResult{}, err
 	}
 	defer rows.Close()
 	var hits []memory.Hit
+	total := 0
 	for rows.Next() {
 		var h memory.Hit
 		var kind string
-		if err := rows.Scan(&h.MemoryID, &h.SpaceID, &h.Title, &kind, &h.Topics, &h.Excerpt, &h.Revision, &h.Score, &h.Provenance); err != nil {
-			return nil, err
+		if err := rows.Scan(&h.MemoryID, &h.SpaceID, &h.Title, &kind, &h.Topics, &h.Excerpt, &h.Revision, &h.Score, &h.Provenance, &total); err != nil {
+			return memory.RepositoryRecallResult{}, err
 		}
 		h.Kind = memory.Kind(kind)
 		hits = append(hits, h)
 	}
-	return hits, rows.Err()
+	return memory.RepositoryRecallResult{Hits: hits, TotalCount: total}, rows.Err()
 }
 
 func (s *Store) Catalog(ctx context.Context, principalID string, readable []string, claims []memory.WorkspaceClaim) ([]memory.CatalogEntry, error) {
@@ -412,6 +456,83 @@ func (s *Store) Catalog(ctx context.Context, principalID string, readable []stri
 		out = append(out, entry)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) DiscoverMetadata(ctx context.Context, q memory.MetadataQuery) (memory.RepositoryMetadataResult, error) {
+	from, value := "", ""
+	switch q.Facet {
+	case memory.MetadataTopic:
+		from, value = "CROSS JOIN LATERAL unnest(r.topics) metadata_value", "metadata_value"
+	case memory.MetadataProvenanceClass:
+		from, value = "CROSS JOIN LATERAL jsonb_array_elements(r.provenance) provenance_entry", "lower(regexp_replace(btrim(provenance_entry->>'class'),'\\s+',' ','g'))"
+	case memory.MetadataProvenanceLocator:
+		from, value = "CROSS JOIN LATERAL jsonb_array_elements(r.provenance) provenance_entry", "provenance_entry->>'locator'"
+	case memory.MetadataProvenanceAttribution:
+		from, value = "CROSS JOIN LATERAL jsonb_array_elements(r.provenance) provenance_entry", "provenance_entry->>'attribution'"
+	default:
+		return memory.RepositoryMetadataResult{}, memory.ErrInvalidInput
+	}
+	base := `WITH metadata AS (
+ SELECT m.id memory_id,` + value + ` value
+ FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
+ ` + from + `
+	 WHERE m.space_id=ANY($2::uuid[])
+	   AND ((m.status='active' AND can_read_space($1,m.space_id)) OR
+	        (m.status<>'active' AND has_direct_space_role($1,m.space_id,'maintainer')))
+	   AND m.status::text=ANY($3::text[])
+	   AND (m.status<>'active' OR r.valid_until IS NULL OR r.valid_until>now())
+), filtered AS (
+ SELECT memory_id,value FROM metadata
+	 WHERE coalesce(value,'')<>'' AND ($4='' OR strpos(lower(value),lower($4))>0)
+), grouped AS (
+ SELECT value,count(DISTINCT memory_id)::integer memory_count FROM filtered GROUP BY value
+) `
+	var total int
+	statuses := make([]string, len(q.Statuses))
+	for i := range q.Statuses {
+		statuses[i] = string(q.Statuses[i])
+	}
+	if err := s.pool.QueryRow(ctx, base+`SELECT count(*)::integer FROM grouped`, q.Principal.ID, q.SpaceIDs, statuses, q.Query).Scan(&total); err != nil {
+		return memory.RepositoryMetadataResult{}, err
+	}
+	rows, err := s.pool.Query(ctx, base+`SELECT value,memory_count FROM grouped
+ ORDER BY memory_count DESC,value LIMIT $5 OFFSET $6`, q.Principal.ID, q.SpaceIDs, statuses, q.Query, q.Limit, q.Offset)
+	if err != nil {
+		return memory.RepositoryMetadataResult{}, err
+	}
+	defer rows.Close()
+	values := make([]memory.MetadataValue, 0, q.Limit)
+	for rows.Next() {
+		var item memory.MetadataValue
+		if err := rows.Scan(&item.Value, &item.MemoryCount); err != nil {
+			return memory.RepositoryMetadataResult{}, err
+		}
+		values = append(values, item)
+	}
+	return memory.RepositoryMetadataResult{Values: values, TotalCount: total}, rows.Err()
+}
+
+func (s *Store) TopicUsage(ctx context.Context, principalID, spaceID string, topics []string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT topic,count(*)::integer
+ FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
+ CROSS JOIN LATERAL unnest(r.topics) topic
+ WHERE m.space_id=$2 AND has_direct_space_role($1,m.space_id,'contributor')
+   AND m.status='active' AND (r.valid_until IS NULL OR r.valid_until>now()) AND topic=ANY($3::text[])
+ GROUP BY topic`, principalID, spaceID, topics)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	usage := make(map[string]int, len(topics))
+	for rows.Next() {
+		var topic string
+		var count int
+		if err := rows.Scan(&topic, &count); err != nil {
+			return nil, err
+		}
+		usage[topic] = count
+	}
+	return usage, rows.Err()
 }
 
 func normalizeClaim(kind, value string) string {

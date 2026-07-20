@@ -79,7 +79,7 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 6 {
+	if len(listed.Tools) != 9 {
 		t.Fatalf("tool count=%d", len(listed.Tools))
 	}
 	var rememberRequired []string
@@ -109,8 +109,17 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if result.IsError || len(result.Content) == 0 {
 		t.Fatalf("catalog result=%#v", result)
 	}
+	for _, call := range []*mcp.CallToolParams{
+		{Name: "suggest_topics", Arguments: map[string]any{"query": "sec"}},
+		{Name: "list_provenance", Arguments: map[string]any{"field": "class"}},
+	} {
+		result, err = session.CallTool(ctx, call)
+		if err != nil || result.IsError {
+			t.Fatalf("%s result=%#v err=%v", call.Name, result, err)
+		}
+	}
 	bodyMarker := "SECRET-BODY-MUST-NOT-APPEAR-IN-MUTATION-RESULT"
-	rememberArgs := map[string]any{"target_space_id": space, "title": "MCP mutation context test", "body": bodyMarker, "kind": "fact", "reason": "integration test", "idempotency_key": "mcp-create-1"}
+	rememberArgs := map[string]any{"target_space_id": space, "title": "MCP mutation context test", "body": strings.Repeat("ordinary line\n", 100) + bodyMarker, "kind": "fact", "reason": "integration test", "idempotency_key": "mcp-create-1"}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remember", Arguments: rememberArgs})
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +129,32 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) {
 		t.Fatalf("mutation result leaked body: %s", text)
+	}
+	var created struct {
+		Memory struct {
+			ID string `json:"id"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &created); err != nil || created.Memory.ID == "" {
+		t.Fatalf("created memory result=%#v err=%v", result, err)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "read_memory", Arguments: map[string]any{"memory_id": created.Memory.ID}})
+	if err != nil || result.IsError {
+		t.Fatalf("full read result=%#v err=%v", result, err)
+	}
+	if text := result.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, bodyMarker) || !strings.Contains(text, `"content_hash"`) {
+		t.Fatalf("full read shape changed: %s", text)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "read_memory_segment", Arguments: map[string]any{"memory_id": created.Memory.ID}})
+	if err != nil || result.IsError {
+		t.Fatalf("bounded read result=%#v err=%v", result, err)
+	}
+	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) || !strings.Contains(text, `"next_start_line":81`) || strings.Contains(text, `"content_hash"`) {
+		t.Fatalf("segment read was not bounded: %s", text)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "read_memory_segment", Arguments: map[string]any{"memory_id": created.Memory.ID, "pattern": "SECRET-BODY"}})
+	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, bodyMarker) {
+		t.Fatalf("grep read result=%#v err=%v", result, err)
 	}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remember", Arguments: rememberArgs})
 	if err != nil {

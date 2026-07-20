@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bytelope/zestmem/internal/authn"
 	"github.com/bytelope/zestmem/internal/memory"
@@ -19,9 +20,34 @@ type Service interface {
 	BrowsePage(context.Context, memory.BrowseQuery) (memory.BrowseResult, error)
 	RecallPage(context.Context, memory.RecallQuery) (memory.RecallResult, error)
 	Read(context.Context, memory.Principal, string) (memory.Memory, error)
+	DiscoverMetadata(context.Context, memory.MetadataQuery) (memory.MetadataResult, error)
+}
+
+type filterRequest struct {
+	Statuses               []memory.Status `json:"statuses,omitempty"`
+	Revision               *int            `json:"revision,omitempty"`
+	ProvenanceClasses      []string        `json:"provenance_classes,omitempty"`
+	ProvenanceLocators     []string        `json:"provenance_locators,omitempty"`
+	ProvenanceAttributions []string        `json:"provenance_attributions,omitempty"`
+	RememberedFrom         *time.Time      `json:"remembered_from,omitempty"`
+	RememberedTo           *time.Time      `json:"remembered_to,omitempty"`
+	RevisedFrom            *time.Time      `json:"revised_from,omitempty"`
+	RevisedTo              *time.Time      `json:"revised_to,omitempty"`
+	ValidFrom              *time.Time      `json:"valid_from,omitempty"`
+	ValidTo                *time.Time      `json:"valid_to,omitempty"`
+}
+
+func (f filterRequest) domain() memory.MemoryFilters {
+	return memory.MemoryFilters{
+		Statuses: f.Statuses, Revision: f.Revision, ProvenanceClasses: f.ProvenanceClasses,
+		ProvenanceLocators: f.ProvenanceLocators, ProvenanceAttributions: f.ProvenanceAttributions,
+		RememberedFrom: f.RememberedFrom, RememberedTo: f.RememberedTo, RevisedFrom: f.RevisedFrom,
+		RevisedTo: f.RevisedTo, ValidFrom: f.ValidFrom, ValidTo: f.ValidTo,
+	}
 }
 
 type browseRequest struct {
+	filterRequest
 	SpaceIDs []string      `json:"space_ids,omitempty"`
 	Kinds    []memory.Kind `json:"kinds,omitempty"`
 	Topics   []string      `json:"topics,omitempty"`
@@ -33,12 +59,22 @@ type browseRequest struct {
 var assets embed.FS
 
 type recallRequest struct {
+	filterRequest
 	Query    string        `json:"query"`
 	SpaceIDs []string      `json:"space_ids,omitempty"`
 	Kinds    []memory.Kind `json:"kinds,omitempty"`
 	Topics   []string      `json:"topics,omitempty"`
 	Limit    int           `json:"limit,omitempty"`
 	Cursor   string        `json:"cursor,omitempty"`
+}
+
+type metadataRequest struct {
+	Facet    memory.MetadataFacet `json:"facet"`
+	Query    string               `json:"query,omitempty"`
+	SpaceIDs []string             `json:"space_ids,omitempty"`
+	Statuses []memory.Status      `json:"statuses,omitempty"`
+	Limit    int                  `json:"limit,omitempty"`
+	Cursor   string               `json:"cursor,omitempty"`
 }
 
 func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handler {
@@ -57,6 +93,20 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 		result, err := domain.Catalog(r.Context(), principal, nil, r.URL.Query().Get("cursor"))
 		writeJSON(w, result, err)
 	})))
+	mux.Handle("POST /api/v1/metadata", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := authn.PrincipalFromContext(r.Context())
+		if !ok {
+			writeError(w, memory.ErrForbidden)
+			return
+		}
+		var input metadataRequest
+		if err := decodeRequest(w, r, &input); err != nil {
+			writeError(w, memory.ErrInvalidInput)
+			return
+		}
+		result, err := domain.DiscoverMetadata(r.Context(), memory.MetadataQuery{Facet: input.Facet, Query: input.Query, SpaceIDs: input.SpaceIDs, Statuses: input.Statuses, Limit: input.Limit, Cursor: input.Cursor, Principal: principal})
+		writeJSON(w, result, err)
+	})))
 	mux.Handle("POST /api/v1/browse", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := authn.PrincipalFromContext(r.Context())
 		if !ok {
@@ -69,7 +119,8 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 			return
 		}
 		result, err := domain.BrowsePage(r.Context(), memory.BrowseQuery{
-			SpaceIDs: input.SpaceIDs, Kinds: input.Kinds, Topics: input.Topics,
+			MemoryFilters: input.filterRequest.domain(),
+			SpaceIDs:      input.SpaceIDs, Kinds: input.Kinds, Topics: input.Topics,
 			Limit: input.Limit, Cursor: input.Cursor, Principal: principal,
 		})
 		writeJSON(w, result, err)
@@ -86,7 +137,8 @@ func Handler(domain Service, protect func(http.Handler) http.Handler) http.Handl
 			return
 		}
 		result, err := domain.RecallPage(r.Context(), memory.RecallQuery{
-			Query: strings.TrimSpace(input.Query), SpaceIDs: input.SpaceIDs, Kinds: input.Kinds,
+			MemoryFilters: input.filterRequest.domain(),
+			Query:         strings.TrimSpace(input.Query), SpaceIDs: input.SpaceIDs, Kinds: input.Kinds,
 			Topics: input.Topics, Limit: input.Limit, Cursor: input.Cursor, Principal: principal,
 		})
 		writeJSON(w, result, err)

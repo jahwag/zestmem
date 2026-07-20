@@ -20,6 +20,39 @@ const (
 
 type fixtureService struct{}
 
+func (fixtureService) DiscoverMetadata(ctx context.Context, query memory.MetadataQuery) (memory.MetadataResult, error) {
+	if query.Query == "slow" {
+		select {
+		case <-time.After(750 * time.Millisecond):
+		case <-ctx.Done():
+			return memory.MetadataResult{}, ctx.Err()
+		}
+	}
+	values := map[memory.MetadataFacet][]memory.MetadataValue{
+		memory.MetadataTopic:                 {{Value: "security", MemoryCount: 3}, {Value: "architecture", MemoryCount: 1}},
+		memory.MetadataProvenanceClass:       {{Value: "verified", MemoryCount: 2}},
+		memory.MetadataProvenanceLocator:     {{Value: "architecture review", MemoryCount: 1}},
+		memory.MetadataProvenanceAttribution: {{Value: "Avery User", MemoryCount: 1}},
+	}
+	if query.Facet == memory.MetadataTopic && query.Query == "" {
+		if query.Cursor == "topic-page-2" {
+			return memory.MetadataResult{Values: values[query.Facet][1:], TotalCount: 2}, nil
+		}
+		return memory.MetadataResult{Values: values[query.Facet][:1], TotalCount: 2, NextCursor: "topic-page-2"}, nil
+	}
+	items := values[query.Facet]
+	if query.Query != "" && query.Query != "slow" {
+		filtered := items[:0]
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.Value), strings.ToLower(query.Query)) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	return memory.MetadataResult{Values: items, TotalCount: len(items)}, nil
+}
+
 func (fixtureService) Catalog(_ context.Context, _ memory.Principal, _ []memory.WorkspaceClaim, cursor ...string) (memory.CatalogResult, error) {
 	if len(cursor) > 0 && cursor[0] == "page-2" {
 		return memory.CatalogResult{Spaces: []memory.CatalogEntry{{
@@ -34,11 +67,26 @@ func (fixtureService) Catalog(_ context.Context, _ memory.Principal, _ []memory.
 }
 
 func (fixtureService) BrowsePage(_ context.Context, query memory.BrowseQuery) (memory.BrowseResult, error) {
+	if len(query.Statuses) == 1 && query.Statuses[0] == memory.StatusRetracted {
+		return memory.BrowseResult{}, nil
+	}
+	if query.Revision != nil && *query.Revision != 2 {
+		return memory.BrowseResult{}, nil
+	}
+	if len(query.ProvenanceClasses) > 0 && query.ProvenanceClasses[0] != "verified" {
+		return memory.BrowseResult{}, nil
+	}
+	if len(query.ProvenanceLocators) > 0 && query.ProvenanceLocators[0] != "architecture review" {
+		return memory.BrowseResult{}, nil
+	}
+	if len(query.ProvenanceAttributions) > 0 && query.ProvenanceAttributions[0] != "Avery User" {
+		return memory.BrowseResult{}, nil
+	}
 	if query.Cursor == "browse-2" {
-		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-3", alphaSpace, "Old deployment lesson", memory.KindLesson, "rollback", time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC))}}, nil
+		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-3", alphaSpace, "Old deployment lesson", memory.KindLesson, "rollback", time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC))}, TotalCount: 3}, nil
 	}
 	if len(query.SpaceIDs) == 1 && query.SpaceIDs[0] == betaSpace {
-		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-4", betaSpace, "Beta security boundary", memory.KindDirective, "credentials", time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC))}}, nil
+		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-4", betaSpace, "Beta security boundary", memory.KindDirective, "credentials", time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC))}, TotalCount: 1}, nil
 	}
 	if len(query.SpaceIDs) == 1 && query.SpaceIDs[0] == alphaSpace {
 		items := make([]memory.BrowseItem, 20)
@@ -47,17 +95,17 @@ func (fixtureService) BrowsePage(_ context.Context, query memory.BrowseQuery) (m
 			id := fmt.Sprintf("alpha-memory-%02d", i+1)
 			items[i] = browseItem(id, alphaSpace, title, memory.KindFact, "A memory in the Alpha Space.", time.Date(2026, 7, 20, 12-i, 0, 0, 0, time.UTC))
 		}
-		return memory.BrowseResult{Items: items}, nil
+		return memory.BrowseResult{Items: items, TotalCount: 20}, nil
 	}
 	if len(query.Kinds) == 1 && query.Kinds[0] == memory.KindLesson {
-		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-3", alphaSpace, "Old deployment lesson", memory.KindLesson, "rollback", time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC))}}, nil
+		return memory.BrowseResult{Items: []memory.BrowseItem{browseItem("memory-3", alphaSpace, "Old deployment lesson", memory.KindLesson, "rollback", time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC))}, TotalCount: 1}, nil
 	}
 	return memory.BrowseResult{
 		Items: []memory.BrowseItem{
 			browseItem("memory-1", alphaSpace, "Keep HTML inert", memory.KindDecision, "Render memory bodies as text.", time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)),
 			browseItem("memory-2", betaSpace, "Reader keys only", memory.KindDirective, "Use a dedicated reader principal.", time.Date(2026, 7, 19, 11, 0, 0, 0, time.UTC)),
 		},
-		NextCursor: "browse-2",
+		TotalCount: 3, NextCursor: "browse-2",
 	}, nil
 }
 
@@ -69,7 +117,7 @@ func (fixtureService) RecallPage(_ context.Context, query memory.RecallQuery) (m
 	return memory.RecallResult{Hits: []memory.Hit{{
 		MemoryID: "memory-1", SpaceID: alphaSpace, Title: "Keep HTML inert", Kind: memory.KindDecision,
 		Topics: []string{"security"}, Excerpt: "Render memory bodies as text.", Revision: 2, Score: 0.032,
-	}}}, nil
+	}}, TotalCount: 1}, nil
 }
 
 func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (memory.Memory, error) {
@@ -100,8 +148,8 @@ func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (me
 		CurrentRevision: memory.Revision{
 			MemoryID: id, Number: 2, Title: title, Body: "Literal body: <img src=x onerror=window.hacked=true>",
 			Kind: kind, Topics: []string{"security", "ui"},
-			Provenance: []memory.Provenance{{Class: "verified", Locator: "architecture review"}},
-			ActorID:    "agent", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
+			Provenance: []memory.Provenance{{Class: "verified", Locator: "architecture review", Attribution: "Avery User"}},
+			ActorID:    "agent", ActorDisplayName: "Athena", CreatedAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC), Reason: "Prevent active content in durable memories",
 		},
 	}, nil
 }
@@ -115,11 +163,12 @@ func browseItem(id, spaceID, title string, kind memory.Kind, excerpt string, upd
 
 func protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer zm_test_reader" {
+		credential := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if credential != "zm_test_reader" && credential != "zm_test_second" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		principal := memory.Principal{ID: "30000000-0000-0000-0000-000000000003", Type: "human"}
+		principal := memory.Principal{ID: credential, Type: "human"}
 		next.ServeHTTP(w, r.WithContext(authn.WithPrincipal(r.Context(), principal)))
 	})
 }
