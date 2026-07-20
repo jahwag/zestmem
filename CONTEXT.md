@@ -1,19 +1,33 @@
 # ZestMem
 
-ZestMem preserves deliberately authored knowledge for humans and autonomous
-agents while keeping visibility, authorship, and source evidence explicit.
+ZestMem preserves deliberately recorded knowledge for humans and autonomous
+agents while keeping visibility, write identity, and source evidence explicit.
 
 ## Language
 
 **Memory**:
-Explicitly authored durable knowledge, not a transcript, task, or handoff.
+Explicitly recorded durable knowledge, not a transcript, task, or handoff.
 
 **Principal**:
 An authenticated human or agent.
 
 **Actor**:
-The authenticated Principal that created a Memory revision. An Actor is factual
-authorship and is distinct from a claimed source.
+The authenticated Principal that recorded a Memory revision. It is the factual
+audit identity for the write, not necessarily the knowledge source, owner, or
+Intended Agent. It is distinct from Source Attribution.
+
+**Historical Principal Association**:
+An append-only administrative assertion that relates a Memory to a Principal
+using a stated basis. It does not rewrite the Actor, establish ownership, or
+grant access.
+
+**Intended Agent**:
+The Principal historically associated with consuming or maintaining a Memory.
+It is not evidence that the Principal authored or authenticated the write.
+
+**Assertion Basis**:
+The immutable Memory revision, source class, and optional locator cited as
+evidence for a Historical Principal Association.
 
 **Knowledge Space**:
 An authorization and visibility container. A `private` Space is a non-inheriting

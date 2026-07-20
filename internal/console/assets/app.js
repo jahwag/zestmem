@@ -388,11 +388,37 @@
     const facts = element('dl', 'memory-facts');
     addFact(facts, 'Remembered', formatDate(memory.created_at));
     addFact(facts, 'Revision made', formatDate(revision.created_at));
-    addFact(facts, 'Current actor display name', revision.actor_display_name || 'Not set');
-    addFact(facts, 'Authenticated actor ID', revision.actor_id || 'Unknown Principal');
+    addFact(facts, 'Authenticated revision actor', revision.actor_display_name || 'Not set');
+    addFact(facts, 'Authenticated Principal ID', revision.actor_id || 'Unknown Principal');
     addFact(facts, 'Valid until', revision.valid_until ? formatDate(revision.valid_until) : 'No expiry');
     addFact(facts, 'Status', memory.status);
     article.append(facts);
+
+    const associations = memory.historical_associations || [];
+    if (associations.length) {
+      const section = element('section', 'detail-section associations');
+      section.append(element('h3', '', 'Historical association'));
+      const list = element('ol', 'association-list');
+      list.setAttribute('role', 'list');
+      for (const association of associations) {
+        const item = element('li', 'association');
+        const relationship = association.relationship === 'intended_agent'
+          ? 'Administratively recorded intended agent'
+          : `Historical association (${association.relationship || 'unknown'})`;
+        const facts = element('dl', 'association-facts');
+        addFact(facts, relationship, association.principal_display_name || association.principal_id);
+        addFact(facts, 'Principal ID', association.principal_id);
+        addFact(facts, 'Asserted by', `${association.asserted_by_display_name || 'Unknown operator'} · ${association.asserted_by}`);
+        addFact(facts, 'Asserted', formatDate(association.asserted_at));
+        const basis = association.basis_locator || 'No locator';
+        item.append(facts, element('p', '', `Basis: revision ${association.basis_revision} · ${association.basis_class}: ${basis}`));
+        item.append(element('p', '', `Reason: ${association.reason}`));
+        item.append(element('p', 'muted', 'Does not imply this Principal authored or supplied the Memory, change the authenticated revision Actor, or grant ownership/access.'));
+        list.append(item);
+      }
+      section.append(list);
+      article.append(section);
+    }
 
     const reason = element('section', 'detail-section');
     reason.append(element('h3', '', 'Reason for remembering'), element('p', '', revision.reason));

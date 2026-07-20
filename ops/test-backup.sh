@@ -19,7 +19,11 @@ trap cleanup EXIT
   --env POSTGRES_PASSWORD=test --env POSTGRES_DB=memory "$image" >/dev/null
 until "$runtime" exec "$db" pg_isready -U postgres -d memory >/dev/null 2>&1; do sleep 1; done
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/001_init.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/002_authorization.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/003_browse_recency.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/004_memory_principal_assertions.sql >/dev/null
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < ops/backup-fixture.sql >/dev/null
 "$runtime" run --rm --network "$network" \
   --env PGHOST=postgres --env PGDATABASE=memory --env PGUSER=postgres --env PGPASSWORD=test \
+  --env BACKUP_FIXTURE_ASSERTIONS=1 \
   --volume "${volume}:/backups" localhost/agent-memory-backup:m1 /usr/local/bin/backup.sh

@@ -65,6 +65,23 @@ type Provenance struct {
 	Attribution string `json:"attribution,omitempty" jsonschema:"Optional unverified source-supplied display name; distinct from the authenticated Actor and never inferred or used for contact data"`
 }
 
+// HistoricalAssociation is an operator assertion about a Memory's historical
+// relationship to a Principal. It is distinct from both the authenticated
+// revision Actor and source Provenance.
+type HistoricalAssociation struct {
+	AssertionID           string    `json:"assertion_id"`
+	Relationship          string    `json:"relationship"`
+	PrincipalID           string    `json:"principal_id"`
+	PrincipalDisplayName  string    `json:"principal_display_name"`
+	BasisRevision         int       `json:"basis_revision"`
+	BasisClass            string    `json:"basis_class"`
+	BasisLocator          string    `json:"basis_locator,omitempty"`
+	AssertedBy            string    `json:"asserted_by"`
+	AssertedByDisplayName string    `json:"asserted_by_display_name,omitempty"`
+	AssertedAt            time.Time `json:"asserted_at"`
+	Reason                string    `json:"reason"`
+}
+
 type Revision struct {
 	MemoryID    string       `json:"memory_id"`
 	Number      int          `json:"number"`
@@ -84,11 +101,12 @@ type Revision struct {
 }
 
 type Memory struct {
-	ID              string    `json:"id"`
-	SpaceID         string    `json:"space_id"`
-	Status          Status    `json:"status"`
-	CurrentRevision Revision  `json:"current_revision"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID                     string                  `json:"id"`
+	SpaceID                string                  `json:"space_id"`
+	Status                 Status                  `json:"status"`
+	CurrentRevision        Revision                `json:"current_revision"`
+	CreatedAt              time.Time               `json:"created_at"`
+	HistoricalAssociations []HistoricalAssociation `json:"historical_associations,omitempty"`
 }
 
 type DuplicateCandidate struct {
@@ -215,6 +233,22 @@ type ProvenancePreview struct {
 	Attribution      string `json:"attribution,omitempty"`
 }
 
+type HistoricalAssociationPreview struct {
+	AssertionID           string    `json:"assertion_id"`
+	Relationship          string    `json:"relationship"`
+	PrincipalID           string    `json:"principal_id"`
+	PrincipalDisplayName  string    `json:"principal_display_name"`
+	BasisRevision         int       `json:"basis_revision"`
+	BasisClass            string    `json:"basis_class"`
+	BasisLocator          string    `json:"basis_locator,omitempty"`
+	BasisTruncated        bool      `json:"basis_truncated,omitempty"`
+	AssertedBy            string    `json:"asserted_by"`
+	AssertedByDisplayName string    `json:"asserted_by_display_name,omitempty"`
+	AssertedAt            time.Time `json:"asserted_at"`
+	Reason                string    `json:"reason"`
+	ReasonTruncated       bool      `json:"reason_truncated,omitempty"`
+}
+
 type ReadQuery struct {
 	Principal    Principal
 	MemoryID     string
@@ -228,28 +262,30 @@ type ReadQuery struct {
 }
 
 type ReadSegmentResult struct {
-	MemoryID           string              `json:"memory_id"`
-	SpaceID            string              `json:"space_id"`
-	Status             Status              `json:"status"`
-	Revision           int                 `json:"revision"`
-	Title              string              `json:"title"`
-	Kind               Kind                `json:"kind"`
-	ActorID            string              `json:"actor_id"`
-	ActorDisplayName   string              `json:"actor_display_name,omitempty"`
-	RevisionCreatedAt  time.Time           `json:"revision_created_at"`
-	Topics             []string            `json:"topics,omitempty"`
-	OmittedTopics      int                 `json:"omitted_topics,omitempty"`
-	Provenance         []ProvenancePreview `json:"provenance,omitempty"`
-	OmittedProvenance  int                 `json:"omitted_provenance,omitempty"`
-	ValidUntil         *time.Time          `json:"valid_until,omitempty"`
-	Reason             string              `json:"reason"`
-	Content            string              `json:"content,omitempty"`
-	Window             *BodyWindow         `json:"body_window,omitempty"`
-	Matches            []BodyMatch         `json:"matches,omitempty"`
-	TotalMatchGroups   int                 `json:"total_match_groups,omitempty"`
-	OmittedMatchGroups int                 `json:"omitted_match_groups,omitempty"`
-	NextMatchStartLine int                 `json:"next_match_start_line,omitempty"`
-	NextMatchStartByte int                 `json:"next_match_start_byte,omitempty"`
+	MemoryID                      string                         `json:"memory_id"`
+	SpaceID                       string                         `json:"space_id"`
+	Status                        Status                         `json:"status"`
+	Revision                      int                            `json:"revision"`
+	Title                         string                         `json:"title"`
+	Kind                          Kind                           `json:"kind"`
+	ActorID                       string                         `json:"actor_id"`
+	ActorDisplayName              string                         `json:"actor_display_name,omitempty"`
+	RevisionCreatedAt             time.Time                      `json:"revision_created_at"`
+	Topics                        []string                       `json:"topics,omitempty"`
+	OmittedTopics                 int                            `json:"omitted_topics,omitempty"`
+	Provenance                    []ProvenancePreview            `json:"provenance,omitempty"`
+	OmittedProvenance             int                            `json:"omitted_provenance,omitempty"`
+	HistoricalAssociations        []HistoricalAssociationPreview `json:"historical_associations,omitempty"`
+	OmittedHistoricalAssociations int                            `json:"omitted_historical_associations,omitempty"`
+	ValidUntil                    *time.Time                     `json:"valid_until,omitempty"`
+	Reason                        string                         `json:"reason"`
+	Content                       string                         `json:"content,omitempty"`
+	Window                        *BodyWindow                    `json:"body_window,omitempty"`
+	Matches                       []BodyMatch                    `json:"matches,omitempty"`
+	TotalMatchGroups              int                            `json:"total_match_groups,omitempty"`
+	OmittedMatchGroups            int                            `json:"omitted_match_groups,omitempty"`
+	NextMatchStartLine            int                            `json:"next_match_start_line,omitempty"`
+	NextMatchStartByte            int                            `json:"next_match_start_byte,omitempty"`
 }
 
 // BrowseItem is the compact representation used by the human-facing memory

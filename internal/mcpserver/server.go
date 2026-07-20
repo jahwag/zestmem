@@ -197,7 +197,7 @@ func (s *Server) register() {
 			s.observed("recall", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory", Description: "Read one full authorized Memory by ID. Prefer read_memory_segment for large bodies.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory", Description: "Read one full authorized Memory by ID. Prefer read_memory_segment for large bodies. An intended-agent association is an administrative claim, not authorship, source attribution, ownership, or access.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
@@ -208,7 +208,7 @@ func (s *Server) register() {
 			s.observed("read_memory", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory_segment", Description: "Read a bounded line/byte window from one authorized Memory body, or provide a Go regular expression for grep-style match groups. Response metadata reports omitted matches and continuation positions.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory_segment", Description: "Read a bounded line/byte window from one authorized Memory body, or provide a Go regular expression for grep-style match groups. Response metadata reports omitted matches and continuation positions. An intended-agent association is an administrative claim, not authorship, source attribution, ownership, or access.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readSegmentInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
