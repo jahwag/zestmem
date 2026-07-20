@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/Bytelope/zestmem/compare/v0.7.1...v0.8.0) (2026-07-20)
+
+
+### Features
+
+* add historical intended-agent associations ([#43](https://github.com/Bytelope/zestmem/issues/43)) ([30a4c72](https://github.com/Bytelope/zestmem/commit/30a4c7299a6d9d7585c26aa34ab850c02a84ba49))
+
 ## [0.7.1](https://github.com/Bytelope/zestmem/compare/v0.7.0...v0.7.1) (2026-07-20)
 
 
