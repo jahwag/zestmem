@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Bytelope/zestmem/compare/v0.6.0...v0.7.0) (2026-07-20)
+
+
+### Features
+
+* expand memory discovery and browser filters ([#39](https://github.com/Bytelope/zestmem/issues/39)) ([30eb35e](https://github.com/Bytelope/zestmem/commit/30eb35e00232bff73b34cb80af3fe7c3ab64707e))
+
 ## [0.6.0](https://github.com/Bytelope/zestmem/compare/v0.5.0...v0.6.0) (2026-07-20)
 
 
