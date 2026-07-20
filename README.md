@@ -43,6 +43,14 @@ The loopback MCP endpoint is `http://127.0.0.1:8080/mcp`. Caddy serves `https://
 
 Open `http://127.0.0.1:8080/console/`. Enter an API key issued to a dedicated Principal with only Reader grants for the Spaces it needs, or a current short-lived OIDC access token.
 
+<p align="center">
+  <a href="docs/images/zestmem-memory-browser.png">
+    <img src="docs/images/zestmem-memory-browser.png" alt="ZestMem memory browser with searchable memories, structured filters, and privacy-blurred example content" width="1200">
+  </a>
+</p>
+
+<p align="center"><em>Browse and filter authorized memories. Memory content is blurred in this screenshot.</em></p>
+
 The console shows exact filtered authorized totals while browsing; browses newest memories; filters by Space, topic, kind, active/retracted status, revision, provenance, and date spans; searches a bounded ranked candidate pool by relevance; and distinguishes the authenticated Actor ID/current display name from optional claimed source attribution. Retracted memories require Maintainer access. Credentials stay in page memory by default; an opt-in uses tab-scoped session storage across refresh. **Lock** aborts requests and clears results, metadata, and that browser copy; it does not revoke the key. Memory bodies are rendered as text, never HTML.
 
 Agents can page or search authorized Topic and Provenance vocabularies with usage counts. `remember` and `revise_memory` return unfamiliar Topics plus established examples; retry with the exact `confirm_new_topics` set to introduce them intentionally. `read_memory` keeps its full-Memory response for compatibility. `read_memory_segment` defaults to at most 80 lines and 4 KiB, includes bounded topic/provenance plus freshness metadata, supports resumable line/byte windows, and accepts a regular expression for grep-style inspection.
