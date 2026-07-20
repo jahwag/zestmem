@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Bytelope/zestmem/compare/v0.5.0...v0.6.0) (2026-07-20)
+
+
+### Features
+
+* add browsable memory console ([#36](https://github.com/Bytelope/zestmem/issues/36)) ([ef36694](https://github.com/Bytelope/zestmem/commit/ef36694142a90a65b3d8308dee125a8100191187))
+
+
+### Bug Fixes
+
+* wait for load database over tcp ([#38](https://github.com/Bytelope/zestmem/issues/38)) ([e0165c7](https://github.com/Bytelope/zestmem/commit/e0165c7eaa5b1189754f4ce2aec67408f91a55aa))
+
 ## [0.5.0](https://github.com/Bytelope/zestmem/compare/v0.4.0...v0.5.0) (2026-07-19)
 
 
