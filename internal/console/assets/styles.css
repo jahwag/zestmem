@@ -105,6 +105,11 @@ main { max-width: 1600px; margin: auto; padding: 26px; }
 .login form { margin-top: 30px; }
 .login label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 750; }
 .login-control { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.session-choice { display: flex !important; align-items: start; gap: 10px; margin-top: 13px; cursor: pointer; }
+.session-choice input { width: 18px; min-height: 18px; margin: 2px 0 0; accent-color: var(--citrus); }
+.session-choice span { display: grid; gap: 2px; }
+.session-choice strong { color: var(--text); font-size: 13px; }
+.session-choice small { color: var(--muted); font-size: 11px; font-weight: 500; }
 
 input, select {
   width: 100%;
@@ -166,8 +171,19 @@ select { width: auto; min-width: 145px; }
 .spaces-toggle { display: none; }
 .filters { display: flex; align-items: center; gap: 9px; margin-top: 11px; }
 .filters label { color: var(--muted); font-size: 12px; font-weight: 720; }
+.filters > span { display: grid; gap: 3px; }
+.metadata-count { display: block; max-width: 250px; color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1.25; }
 .filters select { min-height: 36px; padding: 6px 30px 6px 10px; font-size: 13px; }
+.filters input { width: min(240px, 30vw); min-height: 36px; padding: 6px 10px; font-size: 13px; }
 #status { flex: 1; margin: 0 2px 0 auto; color: var(--muted); font-size: 12px; text-align: right; }
+.advanced-filters { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.filter-grid { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)); gap: 10px; }
+.advanced-filters label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 720; }
+.advanced-filters input, .advanced-filters select { width: 100%; min-width: 0; min-height: 38px; padding: 7px 10px; font-size: 12px; }
+.date-filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.date-filters fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-width: 0; margin: 0; padding: 9px; border: 1px solid var(--line); border-radius: 9px; }
+.date-filters legend { padding: 0 5px; color: var(--citrus); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.filter-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 .columns { display: grid; grid-template-columns: minmax(330px, 42%) minmax(0, 1fr); gap: 18px; align-items: start; }
 .result-panel { min-height: calc(100vh - 236px); overflow: hidden; }
@@ -222,6 +238,7 @@ select { width: auto; min-width: 145px; }
 .source { display: grid; grid-template-columns: minmax(100px, 28%) 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid #202b30; font-size: 12px; }
 .source strong { color: var(--sky); }
 .source span { color: var(--muted); overflow-wrap: anywhere; }
+.source em { color: var(--citrus); font-style: normal; }
 
 .empty-state, .empty-list { display: grid; min-height: 36vh; place-content: center; justify-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .empty-state > span, .empty-list > span { color: var(--citrus); font-size: 42px; }
@@ -247,6 +264,8 @@ select { width: auto; min-width: 145px; }
   #sidebar-backdrop { position: fixed; inset: 68px 0 0; z-index: 25; width: 100%; border: 0; background: #0008; }
   .sidebar-open #sidebar-backdrop { display: block; }
   .spaces-toggle, #close-sidebar { display: inline-block; }
+  .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .date-filters { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
@@ -258,12 +277,13 @@ select { width: auto; min-width: 145px; }
   .toolbar-topline { flex-wrap: wrap; }
   .toolbar form { order: 3; flex-basis: 100%; }
   .filters { flex-wrap: wrap; }
-  .filters label { display: none; }
-  .filters select { flex: 1; min-width: 120px; }
+  .filters label { display: block; }
+  .filters select, .filters input { flex: 1; width: auto; min-width: 120px; }
   #status { flex-basis: 100%; margin-top: 4px; text-align: left; }
   .columns { grid-template-columns: 1fr; }
   .result-panel, .memory { min-height: 0; }
   .memory { scroll-margin-top: 82px; }
+  .filter-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bytelope/zestmem/internal/authn"
+	"github.com/bytelope/zestmem/internal/buildinfo"
 	"github.com/bytelope/zestmem/internal/embed"
 	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,18 +27,18 @@ type Observer interface {
 
 const usageInstructions = `Use ZestMem as durable project memory, not as a transcript store.
 
-For substantial repository work, first call catalog and recall with task-specific terms to find relevant architecture decisions, conventions, prior bugs, constraints, and unfinished work. Skip memory lookup for trivial edits, general questions, and unrelated system administration. After context loss, call catalog again. Recall returns compact candidates; use read_memory for the full body of relevant hits.
+For substantial repository work, first call catalog and recall with task-specific terms to find relevant architecture decisions, conventions, prior bugs, constraints, and unfinished work. Skip memory lookup for trivial edits, general questions, and unrelated system administration. After context loss, call catalog again. Recall returns compact candidates; use read_memory_segment for bounded body windows or grep-style matches, and read_memory only when the whole Memory is needed.
 
-After substantial work, proactively remember durable, verified knowledge likely to help future agents: accepted architectural decisions, stable conventions, non-obvious verified constraints, and reusable root-cause findings. Check for related memories and revise or deduplicate rather than creating conflicts. Keep memories concise, scoped, and supported by repository or tool evidence.
+After substantial work, proactively remember durable, verified knowledge likely to help future agents: accepted architectural decisions, stable conventions, non-obvious verified constraints, and reusable root-cause findings. Use suggest_topics before choosing Topics, prefer established vocabulary, and confirm the exact set of genuinely new Topics explicitly. Check for related memories and revise or deduplicate rather than creating conflicts. Keep memories concise, scoped, and supported by repository or tool evidence. Use only an operator-designated, exclusively granted Space for agent-private knowledge; Topics describe subject matter and never control visibility. Before writing user_instruction Provenance, use list_provenance for existing attribution vocabulary. Set attribution only to a stable display name the human has supplied for durable attribution, and never guess; it is an unverified source claim, while the authenticated Actor remains separate.
 
-Never store transcripts, chat summaries, secrets, credentials, personal data, speculation, temporary task state, routine command output, or facts obvious from the repository. Do not write merely because a task completed. Explicit user requests to remember or forget take precedence.`
+Never store transcripts, chat summaries, secrets, credentials, other personal data, speculation, temporary task state, routine command output, or facts obvious from the repository. Source Attribution must never infer identity or include contact identifiers. Do not write merely because a task completed. Explicit user requests to remember or forget take precedence.`
 
 func New(domain *memory.Service, observers ...Observer) *Server {
 	s := &Server{domain: domain}
 	if len(observers) > 0 {
 		s.observer = observers[0]
 	}
-	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "agent-memory", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: usageInstructions})
+	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "agent-memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: usageInstructions})
 	s.register()
 	return s
 }
@@ -71,6 +72,34 @@ type readInput struct {
 	MemoryID string `json:"memory_id" jsonschema:"Memory UUID returned by recall"`
 }
 
+type readSegmentInput struct {
+	MemoryID     string `json:"memory_id" jsonschema:"Memory UUID returned by recall"`
+	StartLine    int    `json:"start_line,omitempty" jsonschema:"First 1-based body line; default 1"`
+	LineCount    int    `json:"line_count,omitempty" jsonschema:"Body lines to return; default 80 and maximum 200"`
+	StartByte    int    `json:"start_byte,omitempty" jsonschema:"Optional 0-based byte offset returned as next_start_byte; mutually exclusive with start_line"`
+	MaxBytes     int    `json:"max_bytes,omitempty" jsonschema:"Maximum body bytes returned; default 4096, minimum 4, and maximum 16384"`
+	Pattern      string `json:"pattern,omitempty" jsonschema:"Optional Go regular expression for grep-style body matching"`
+	ContextLines int    `json:"context_lines,omitempty" jsonschema:"Lines around each match; maximum 10"`
+	MaxMatches   int    `json:"max_matches,omitempty" jsonschema:"Maximum match groups; default 20 and maximum 50"`
+}
+
+type suggestTopicsInput struct {
+	Query    string          `json:"query,omitempty" jsonschema:"Optional substring for narrowing existing Topics"`
+	SpaceIDs []string        `json:"space_ids,omitempty" jsonschema:"Optional accessible Space UUIDs"`
+	Statuses []memory.Status `json:"statuses,omitempty" jsonschema:"Statuses to inspect; default active. Non-active values require maintainer access"`
+	Limit    int             `json:"limit,omitempty" jsonschema:"Result count, default 20 and maximum 100"`
+	Cursor   string          `json:"cursor,omitempty"`
+}
+
+type listProvenanceInput struct {
+	Field    string          `json:"field" jsonschema:"One of class, locator, or attribution"`
+	Query    string          `json:"query,omitempty" jsonschema:"Optional substring for narrowing values"`
+	SpaceIDs []string        `json:"space_ids,omitempty" jsonschema:"Optional accessible Space UUIDs"`
+	Statuses []memory.Status `json:"statuses,omitempty" jsonschema:"Statuses to inspect; default active. Non-active values require maintainer access"`
+	Limit    int             `json:"limit,omitempty" jsonschema:"Result count, default 20 and maximum 100"`
+	Cursor   string          `json:"cursor,omitempty"`
+}
+
 type rememberInput struct {
 	TargetSpaceID       string                  `json:"target_space_id" jsonschema:"Target Space UUID returned by catalog"`
 	WorkspaceClaims     []memory.WorkspaceClaim `json:"workspace_claims,omitempty"`
@@ -83,6 +112,7 @@ type rememberInput struct {
 	Reason              string                  `json:"reason" jsonschema:"Human-readable reason for making durable knowledge"`
 	IdempotencyKey      string                  `json:"idempotency_key"`
 	DuplicateResolution string                  `json:"duplicate_resolution,omitempty" jsonschema:"Set to create_distinct only after reviewing candidates"`
+	ConfirmNewTopics    []string                `json:"confirm_new_topics,omitempty" jsonschema:"Exact unfamiliar Topic values intentionally being introduced; omit to receive advice first"`
 }
 
 type reviseFields struct {
@@ -105,6 +135,7 @@ type reviseInput struct {
 	ChangedFields    reviseFields `json:"changed_fields"`
 	Reason           string       `json:"reason"`
 	IdempotencyKey   string       `json:"idempotency_key"`
+	ConfirmNewTopics []string     `json:"confirm_new_topics,omitempty" jsonschema:"Exact unfamiliar Topic values intentionally being introduced; omit to receive advice first"`
 }
 
 type retractInput struct {
@@ -126,7 +157,36 @@ func (s *Server) register() {
 			s.observed("catalog", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "recall", Description: "Before substantial repository work, search durable memory with task-specific terms for relevant decisions, conventions, prior bugs, constraints, and unfinished work. Returns compact hits without bodies.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "suggest_topics", Description: "Search or page through authorized Topics with usage counts before labeling a Memory. Prefer existing Topics; introducing a new Topic requires explicit confirmation on remember or revise.", Annotations: readOnlyAnnotations()},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestTopicsInput) (*mcp.CallToolResult, any, error) {
+			start := time.Now()
+			principal, err := principal(ctx)
+			if err != nil {
+				return toolError(err)
+			}
+			out, err := s.domain.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: memory.MetadataTopic, Query: in.Query, SpaceIDs: in.SpaceIDs, Statuses: in.Statuses, Limit: in.Limit, Cursor: in.Cursor, Principal: principal})
+			s.observed("suggest_topics", start, err)
+			return toolResult(out, err)
+		})
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "list_provenance", Description: "Search or page through authorized Provenance classes, locators, or source attributions with usage counts.", Annotations: readOnlyAnnotations()},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in listProvenanceInput) (*mcp.CallToolResult, any, error) {
+			start := time.Now()
+			principal, err := principal(ctx)
+			if err != nil {
+				return toolError(err)
+			}
+			facets := map[string]memory.MetadataFacet{"class": memory.MetadataProvenanceClass, "locator": memory.MetadataProvenanceLocator, "attribution": memory.MetadataProvenanceAttribution}
+			facet, ok := facets[in.Field]
+			if !ok {
+				err := fmt.Errorf("%w: provenance field must be class, locator, or attribution", memory.ErrInvalidInput)
+				s.observed("list_provenance", start, err)
+				return toolError(err)
+			}
+			out, err := s.domain.DiscoverMetadata(ctx, memory.MetadataQuery{Facet: facet, Query: in.Query, SpaceIDs: in.SpaceIDs, Statuses: in.Statuses, Limit: in.Limit, Cursor: in.Cursor, Principal: principal})
+			s.observed("list_provenance", start, err)
+			return toolResult(out, err)
+		})
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "recall", Description: "Before substantial repository work, search durable memory with task-specific terms for relevant decisions, conventions, prior bugs, constraints, and unfinished work. Returns compact hits without bodies and a bounded ranked-candidate count.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in recallInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
@@ -137,7 +197,7 @@ func (s *Server) register() {
 			s.observed("recall", start, err)
 			return toolResult(out, err)
 		})
-	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory", Description: "Read one full Memory body by ID after selecting it from recall.", Annotations: readOnlyAnnotations()},
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory", Description: "Read one full authorized Memory by ID. Prefer read_memory_segment for large bodies.", Annotations: readOnlyAnnotations()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			principal, err := principal(ctx)
@@ -148,6 +208,17 @@ func (s *Server) register() {
 			s.observed("read_memory", start, err)
 			return toolResult(out, err)
 		})
+	mcp.AddTool(s.mcp, &mcp.Tool{Name: "read_memory_segment", Description: "Read a bounded line/byte window from one authorized Memory body, or provide a Go regular expression for grep-style match groups. Response metadata reports omitted matches and continuation positions.", Annotations: readOnlyAnnotations()},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in readSegmentInput) (*mcp.CallToolResult, any, error) {
+			start := time.Now()
+			principal, err := principal(ctx)
+			if err != nil {
+				return toolError(err)
+			}
+			out, err := s.domain.ReadSegment(ctx, memory.ReadQuery{Principal: principal, MemoryID: in.MemoryID, StartLine: in.StartLine, LineCount: in.LineCount, StartByte: in.StartByte, MaxBytes: in.MaxBytes, Pattern: in.Pattern, ContextLines: in.ContextLines, MaxMatches: in.MaxMatches})
+			s.observed("read_memory_segment", start, err)
+			return toolResult(out, err)
+		})
 	mcp.AddTool(s.mcp, &mcp.Tool{Name: "remember", Description: "Proactively preserve concise, verified project knowledge likely to help future work, such as accepted decisions, stable conventions, non-obvious constraints, and reusable root causes. Checks duplicates first. Never store transcripts, secrets, personal data, speculation, temporary state, routine output, or obvious repository facts.", Annotations: mutationAnnotations(false)},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in rememberInput) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
@@ -155,9 +226,12 @@ func (s *Server) register() {
 			if err != nil {
 				return toolError(err)
 			}
-			out, err := s.domain.Remember(ctx, memory.RememberCommand{Principal: principal, SpaceID: in.TargetSpaceID, WorkspaceClaims: in.WorkspaceClaims, Title: in.Title, Body: in.Body, Kind: in.Kind, Topics: in.Topics, Provenance: in.Provenance, ValidUntil: in.ValidUntil, Reason: in.Reason, IdempotencyKey: in.IdempotencyKey, DuplicateResolution: in.DuplicateResolution})
+			out, err := s.domain.Remember(ctx, memory.RememberCommand{Principal: principal, SpaceID: in.TargetSpaceID, WorkspaceClaims: in.WorkspaceClaims, Title: in.Title, Body: in.Body, Kind: in.Kind, Topics: in.Topics, Provenance: in.Provenance, ValidUntil: in.ValidUntil, Reason: in.Reason, IdempotencyKey: in.IdempotencyKey, DuplicateResolution: in.DuplicateResolution, ConfirmNewTopics: in.ConfirmNewTopics})
 			s.observed("remember", start, err)
 			if errors.Is(err, memory.ErrDuplicate) {
+				return toolErrorValue(compactMutation(out), err)
+			}
+			if errors.Is(err, memory.ErrUnfamiliarTopics) {
 				return toolErrorValue(compactMutation(out), err)
 			}
 			return toolResult(compactMutation(out), err)
@@ -199,8 +273,11 @@ func (s *Server) register() {
 			} else if in.ChangedFields.ValidUntil != nil {
 				r.ValidUntil = in.ChangedFields.ValidUntil
 			}
-			out, err := s.domain.Revise(ctx, memory.ReviseCommand{Principal: p, MemoryID: in.MemoryID, ExpectedRevision: in.ExpectedRevision, Title: r.Title, Body: r.Body, Kind: r.Kind, Topics: r.Topics, Provenance: r.Provenance, ValidUntil: r.ValidUntil, Reason: in.Reason, IdempotencyKey: in.IdempotencyKey})
+			out, err := s.domain.Revise(ctx, memory.ReviseCommand{Principal: p, MemoryID: in.MemoryID, ExpectedRevision: in.ExpectedRevision, Title: r.Title, Body: r.Body, Kind: r.Kind, Topics: r.Topics, Provenance: r.Provenance, ValidUntil: r.ValidUntil, Reason: in.Reason, IdempotencyKey: in.IdempotencyKey, ConfirmNewTopics: in.ConfirmNewTopics})
 			s.observed("revise_memory", start, err)
+			if errors.Is(err, memory.ErrUnfamiliarTopics) {
+				return toolErrorValue(compactMutation(out), err)
+			}
 			return toolResult(compactMutation(out), err)
 		})
 	mcp.AddTool(s.mcp, &mcp.Tool{Name: "retract_memory", Description: "Soft-retract incorrect or obsolete knowledge using optimistic concurrency.", Annotations: mutationAnnotations(true)},
@@ -234,13 +311,19 @@ func compactMutation(result memory.MutationResult) any {
 		Title    string        `json:"title,omitempty"`
 	}
 	mem := result.Memory
+	var compact *compactMemory
+	if mem.ID != "" {
+		compact = &compactMemory{ID: mem.ID, SpaceID: mem.SpaceID, Status: mem.Status, Revision: mem.CurrentRevision.Number, Title: mem.CurrentRevision.Title}
+	}
 	return struct {
-		Memory              compactMemory               `json:"memory"`
+		Memory              *compactMemory              `json:"memory,omitempty"`
 		Written             bool                        `json:"written"`
 		Replayed            bool                        `json:"replayed"`
 		DuplicateCandidates []memory.DuplicateCandidate `json:"duplicate_candidates,omitempty"`
+		UnfamiliarTopics    []string                    `json:"unfamiliar_topics,omitempty"`
+		TopicSuggestions    []memory.MetadataValue      `json:"existing_topic_examples,omitempty"`
 	}{
-		Memory: compactMemory{ID: mem.ID, SpaceID: mem.SpaceID, Status: mem.Status, Revision: mem.CurrentRevision.Number, Title: mem.CurrentRevision.Title}, Written: result.Written, Replayed: result.Replayed, DuplicateCandidates: result.DuplicateCandidates,
+		Memory: compact, Written: result.Written, Replayed: result.Replayed, DuplicateCandidates: result.DuplicateCandidates, UnfamiliarTopics: result.UnfamiliarTopics, TopicSuggestions: result.TopicSuggestions,
 	}
 }
 
@@ -268,7 +351,7 @@ func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
 func toolError(err error) (*mcp.CallToolResult, any, error) {
 	message := "operation failed"
 	switch {
-	case errors.Is(err, memory.ErrInvalidInput), errors.Is(err, memory.ErrConflict), errors.Is(err, memory.ErrDuplicate), errors.Is(err, memory.ErrIdempotencyReuse), errors.Is(err, memory.ErrNotFound), errors.Is(err, memory.ErrForbidden):
+	case errors.Is(err, memory.ErrInvalidInput), errors.Is(err, memory.ErrConflict), errors.Is(err, memory.ErrDuplicate), errors.Is(err, memory.ErrUnfamiliarTopics), errors.Is(err, memory.ErrIdempotencyReuse), errors.Is(err, memory.ErrNotFound), errors.Is(err, memory.ErrForbidden):
 		message = err.Error()
 	case errors.Is(err, authn.ErrUnauthenticated):
 		message = "unauthenticated"

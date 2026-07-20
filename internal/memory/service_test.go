@@ -64,7 +64,7 @@ func TestRecallCursorPagesStableRankedHits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Hits) != 3 || first.NextCursor == "" {
+	if len(first.Hits) != 3 || first.TotalCount != 7 || first.NextCursor == "" {
 		t.Fatalf("first=%#v", first)
 	}
 	second, err := svc.RecallPage(context.Background(), RecallQuery{Principal: Principal{ID: "agent"}, Query: "task", Limit: 3, Cursor: first.NextCursor})
@@ -91,7 +91,7 @@ func TestBrowseCursorPagesAndFiltersAreAuthorizationBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Items) != 2 || first.NextCursor == "" || repo.browseQuery.SpaceIDs[0] != "project" || len(repo.browseQuery.SpaceIDs) != 1 {
+	if len(first.Items) != 2 || first.TotalCount != 3 || first.NextCursor == "" || repo.browseQuery.SpaceIDs[0] != "project" || len(repo.browseQuery.SpaceIDs) != 1 {
 		t.Fatalf("first=%#v query=%#v", first, repo.browseQuery)
 	}
 	if len(repo.browseQuery.Topics) != 1 || repo.browseQuery.Topics[0] != "architecture" {
@@ -184,6 +184,169 @@ func TestRememberNormalizesTopicsAndDefaultsProvenance(t *testing.T) {
 	}
 }
 
+func TestRememberRequiresIntentionalNewTopics(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.topicUsage = map[string]int{}
+	repo.metadata = RepositoryMetadataResult{Values: []MetadataValue{{Value: "architecture", MemoryCount: 9}}, TotalCount: 1}
+	cmd := validRemember()
+	result, err := svc.Remember(context.Background(), cmd)
+	if !errors.Is(err, ErrUnfamiliarTopics) || result.Written || len(repo.memories) != 0 {
+		t.Fatalf("result=%#v err=%v memories=%d", result, err, len(repo.memories))
+	}
+	if len(result.UnfamiliarTopics) != 2 || result.TopicSuggestions[0].Value != "architecture" {
+		t.Fatalf("topic advice=%#v", result)
+	}
+	cmd.ConfirmNewTopics = result.UnfamiliarTopics
+	result, err = svc.Remember(context.Background(), cmd)
+	if err != nil || !result.Written || len(result.UnfamiliarTopics) != 2 {
+		t.Fatalf("confirmed result=%#v err=%v", result, err)
+	}
+}
+
+func TestRememberConfirmationMustMatchCurrentUnfamiliarTopics(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.topicUsage = map[string]int{}
+	cmd := validRemember()
+	cmd.ConfirmNewTopics = []string{"api design"}
+	result, err := svc.Remember(context.Background(), cmd)
+	if !errors.Is(err, ErrUnfamiliarTopics) || result.Written || len(repo.memories) != 0 {
+		t.Fatalf("partial confirmation wrote: result=%#v err=%v", result, err)
+	}
+	cmd.Topics = []string{"different topic"}
+	result, err = svc.Remember(context.Background(), cmd)
+	if !errors.Is(err, ErrUnfamiliarTopics) || result.Written || len(repo.memories) != 0 {
+		t.Fatalf("stale confirmation wrote: result=%#v err=%v", result, err)
+	}
+}
+
+func TestReadSegmentPagesAndGrepsWithoutReturningFullBody(t *testing.T) {
+	svc, repo, _ := testService()
+	cmd := validRemember()
+	cmd.Topics = nil
+	cmd.Body = "one\nneedle two\nthree\nfour\nneedle five\nsix"
+	cmd.Provenance = []Provenance{{Class: "user_instruction", Locator: strings.Repeat("source", 100), Attribution: "Avery"}}
+	validUntil := time.Now().Add(time.Hour)
+	cmd.ValidUntil = &validUntil
+	created, err := svc.Remember(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, StartLine: 2, LineCount: 2})
+	if err != nil || window.Content != "needle two\nthree" || window.Window.NextStartLine != 4 || len(window.Provenance) != 1 || !window.Provenance[0].LocatorTruncated || window.Provenance[0].Attribution != "Avery" || window.ValidUntil == nil || window.Reason == "" {
+		t.Fatalf("window=%#v err=%v", window, err)
+	}
+	matches, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, Pattern: "needle", ContextLines: 1})
+	if err != nil || len(matches.Matches) != 1 || matches.Matches[0].StartLine != 1 || matches.Matches[0].EndLine != 6 {
+		t.Fatalf("matches=%#v err=%v", matches, err)
+	}
+	if repo.memories[created.Memory.ID].CurrentRevision.Body == "" {
+		t.Fatal("bounded read mutated stored memory")
+	}
+}
+
+func TestReadSegmentByteCeilingHandlesOneLongUTF8Line(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.Topics = nil
+	cmd.Body = strings.Repeat("é", 3000)
+	created, err := svc.Remember(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID})
+	if err != nil || len(first.Content) > 4096 || first.Window.NextStartByte == 0 {
+		t.Fatalf("first=%#v err=%v", first.Window, err)
+	}
+	second, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, StartByte: first.Window.NextStartByte})
+	if err != nil || first.Content+second.Content != cmd.Body {
+		t.Fatalf("second=%#v err=%v reconstructed=%d want=%d", second.Window, err, len(first.Content+second.Content), len(cmd.Body))
+	}
+}
+
+func TestReadSegmentReportsNewlineAndGrepTruncationPrecisely(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.Topics = nil
+	cmd.Body = "a\nneedle one\nx\nneedle two\ny\nneedle three"
+	created, err := svc.Remember(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, MaxBytes: 4})
+	if err != nil || window.Content != "a\nne" || window.Window.EndLine != 2 || window.Window.NextStartByte != 4 {
+		t.Fatalf("newline window=%#v err=%v", window, err)
+	}
+	matches, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, Pattern: "needle", MaxMatches: 1})
+	if err != nil || matches.TotalMatchGroups != 3 || matches.OmittedMatchGroups != 2 || matches.NextMatchStartLine != 4 {
+		t.Fatalf("grep truncation=%#v err=%v", matches, err)
+	}
+}
+
+func TestReadSegmentProvidesByteContinuationForTruncatedMatch(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.Topics = nil
+	cmd.Body = strings.Repeat("needle", 1000)
+	created, err := svc.Remember(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, Pattern: "needle", MaxBytes: 64})
+	if err != nil || len(matches.Matches) != 1 || !matches.Matches[0].Truncated || matches.NextMatchStartByte != 64 || matches.OmittedMatchGroups != 0 {
+		t.Fatalf("truncated match=%#v err=%v", matches, err)
+	}
+}
+
+func TestMetadataDiscoveryCursorIsBoundToFacetAndAuthorization(t *testing.T) {
+	svc, repo, auth := testService()
+	auth.spaces = []string{"project"}
+	repo.metadata = RepositoryMetadataResult{Values: []MetadataValue{{Value: "go", MemoryCount: 3}}, TotalCount: 2}
+	first, err := svc.DiscoverMetadata(context.Background(), MetadataQuery{Facet: MetadataTopic, Principal: Principal{ID: "agent"}, SpaceIDs: []string{"project", "forbidden"}, Limit: 1})
+	if err != nil || first.TotalCount != 2 || first.NextCursor == "" {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	_, err = svc.DiscoverMetadata(context.Background(), MetadataQuery{Facet: MetadataProvenanceClass, Principal: Principal{ID: "agent"}, Limit: 1, Cursor: first.NextCursor})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("cross-facet cursor error=%v", err)
+	}
+}
+
+func TestMetadataDiscoveryHasSerializedResponseBudget(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.metadata.TotalCount = 100
+	for i := 0; i < 100; i++ {
+		repo.metadata.Values = append(repo.metadata.Values, MetadataValue{Value: fmt.Sprintf("%03d-%s", i, strings.Repeat("locator", 280)), MemoryCount: 1})
+	}
+	page, err := svc.DiscoverMetadata(context.Background(), MetadataQuery{Facet: MetadataProvenanceLocator, Principal: Principal{ID: "agent"}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(page)
+	if len(raw) > 13<<10 || len(page.Values) >= 100 || page.NextCursor == "" {
+		t.Fatalf("metadata response bytes=%d values=%d cursor=%q", len(raw), len(page.Values), page.NextCursor)
+	}
+	seen := len(page.Values)
+	for page.NextCursor != "" {
+		page, err = svc.DiscoverMetadata(context.Background(), MetadataQuery{Facet: MetadataProvenanceLocator, Principal: Principal{ID: "agent"}, Limit: 100, Cursor: page.NextCursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen += len(page.Values)
+	}
+	if seen != 100 {
+		t.Fatalf("paged metadata values=%d", seen)
+	}
+}
+
+func TestMetadataDiscoveryDoesNotReturnNonAdvancingCursor(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.metadata = RepositoryMetadataResult{Values: []MetadataValue{}, TotalCount: 2}
+	page, err := svc.DiscoverMetadata(context.Background(), MetadataQuery{Facet: MetadataTopic, Principal: Principal{ID: "agent"}})
+	if err != nil || page.NextCursor != "" {
+		t.Fatalf("empty metadata page=%#v err=%v", page, err)
+	}
+}
+
 func TestRememberReturnsNearDuplicateWithoutWriting(t *testing.T) {
 	svc, repo, _ := testService()
 	repo.similar = []DuplicateCandidate{{MemoryID: "old", Title: "Existing", Score: .91}}
@@ -217,6 +380,7 @@ func TestRememberIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	repo.topicUsage = map[string]int{}
 	second, err := svc.Remember(context.Background(), cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -415,6 +579,8 @@ type fakeRepo struct {
 	browse        []BrowseItem
 	browseQuery   BrowseQuery
 	browseCalls   int
+	metadata      RepositoryMetadataResult
+	topicUsage    map[string]int
 	auth          Authorizer
 }
 
@@ -499,7 +665,7 @@ func (r *fakeRepo) Retract(_ context.Context, rec RetractRecord) (Memory, error)
 	return mem, nil
 }
 
-func (r *fakeRepo) Browse(_ context.Context, q BrowseQuery) ([]BrowseItem, error) {
+func (r *fakeRepo) Browse(_ context.Context, q BrowseQuery) (RepositoryBrowseResult, error) {
 	r.browseCalls++
 	r.browseQuery = q
 	if r.browse != nil {
@@ -513,10 +679,10 @@ func (r *fakeRepo) Browse(_ context.Context, q BrowseQuery) ([]BrowseItem, error
 			}
 		}
 		if start >= len(r.browse) {
-			return nil, nil
+			return RepositoryBrowseResult{TotalCount: len(r.browse)}, nil
 		}
 		end := min(len(r.browse), start+q.Limit)
-		return r.browse[start:end], nil
+		return RepositoryBrowseResult{Items: r.browse[start:end], TotalCount: len(r.browse)}, nil
 	}
 	var items []BrowseItem
 	for _, mem := range r.memories {
@@ -536,7 +702,7 @@ func (r *fakeRepo) Browse(_ context.Context, q BrowseQuery) ([]BrowseItem, error
 	if len(items) > q.Limit {
 		items = items[:q.Limit]
 	}
-	return items, nil
+	return RepositoryBrowseResult{Items: items, TotalCount: len(items)}, nil
 }
 
 func contains(values []string, value string) bool {
@@ -557,13 +723,13 @@ func containsKind(values []Kind, value Kind) bool {
 	return false
 }
 
-func (r *fakeRepo) Recall(_ context.Context, q RecallQuery) ([]Hit, error) {
+func (r *fakeRepo) Recall(_ context.Context, q RecallQuery) (RepositoryRecallResult, error) {
 	if r.hits != nil {
 		if q.Offset >= len(r.hits) {
-			return nil, nil
+			return RepositoryRecallResult{TotalCount: len(r.hits)}, nil
 		}
 		end := min(len(r.hits), q.Offset+q.Limit)
-		return r.hits[q.Offset:end], nil
+		return RepositoryRecallResult{Hits: r.hits[q.Offset:end], TotalCount: len(r.hits)}, nil
 	}
 	var hits []Hit
 	for _, mem := range r.memories {
@@ -578,7 +744,7 @@ func (r *fakeRepo) Recall(_ context.Context, q RecallQuery) ([]Hit, error) {
 	if len(hits) > q.Limit {
 		hits = hits[:q.Limit]
 	}
-	return hits, nil
+	return RepositoryRecallResult{Hits: hits, TotalCount: len(hits)}, nil
 }
 
 func (r *fakeRepo) Catalog(context.Context, string, []string, []WorkspaceClaim) ([]CatalogEntry, error) {
@@ -586,6 +752,28 @@ func (r *fakeRepo) Catalog(context.Context, string, []string, []WorkspaceClaim) 
 		return r.catalog, nil
 	}
 	return []CatalogEntry{{SpaceID: "project", Name: "Project", Slug: "project", Type: "project", Topics: []string{"go"}}}, nil
+}
+
+func (r *fakeRepo) DiscoverMetadata(_ context.Context, query MetadataQuery) (RepositoryMetadataResult, error) {
+	if r.metadata.Values != nil || r.metadata.TotalCount != 0 {
+		if query.Offset >= len(r.metadata.Values) {
+			return RepositoryMetadataResult{TotalCount: r.metadata.TotalCount}, nil
+		}
+		end := min(len(r.metadata.Values), query.Offset+query.Limit)
+		return RepositoryMetadataResult{Values: r.metadata.Values[query.Offset:end], TotalCount: r.metadata.TotalCount}, nil
+	}
+	return RepositoryMetadataResult{Values: []MetadataValue{{Value: "go", MemoryCount: 3}}, TotalCount: 1}, nil
+}
+
+func (r *fakeRepo) TopicUsage(_ context.Context, _, _ string, topics []string) (map[string]int, error) {
+	if r.topicUsage != nil {
+		return r.topicUsage, nil
+	}
+	usage := make(map[string]int, len(topics))
+	for _, topic := range topics {
+		usage[topic] = 1
+	}
+	return usage, nil
 }
 
 func (r *fakeRepo) ResolveWorkspace(context.Context, []WorkspaceClaim) ([]string, error) {

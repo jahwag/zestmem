@@ -38,9 +38,9 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 func (s *Store) ByExternalIdentity(ctx context.Context, issuer, subject string) (memory.Principal, error) {
 	var principal memory.Principal
 	err := s.pool.QueryRow(ctx,
-		"SELECT id::text, type::text FROM principals WHERE external_issuer=$1 AND external_subject=$2 AND disabled_at IS NULL",
+		"SELECT id::text, type::text, display_name FROM principals WHERE external_issuer=$1 AND external_subject=$2 AND disabled_at IS NULL",
 		issuer, subject,
-	).Scan(&principal.ID, &principal.Type)
+	).Scan(&principal.ID, &principal.Type, &principal.DisplayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return memory.Principal{}, memory.ErrNotFound
 	}
@@ -59,10 +59,10 @@ func (s *Store) ByAPIKeyDigest(ctx context.Context, digest []byte) (memory.Princ
 	var principal memory.Principal
 	var keyID string
 	err = tx.QueryRow(ctx,
-		"SELECT p.id::text, p.type::text, k.id::text FROM api_keys k JOIN principals p ON p.id=k.principal_id "+
+		"SELECT p.id::text, p.type::text, p.display_name, k.id::text FROM api_keys k JOIN principals p ON p.id=k.principal_id "+
 			"WHERE k.digest=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND p.disabled_at IS NULL",
 		digest,
-	).Scan(&principal.ID, &principal.Type, &keyID)
+	).Scan(&principal.ID, &principal.Type, &principal.DisplayName, &keyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return memory.Principal{}, memory.ErrNotFound
 	}
