@@ -9,6 +9,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 gh release download "$version" --repo "$repo" --dir "$tmp"
 (cd "$tmp" && sha256sum --check checksums.txt)
+sh "$(dirname "$0")/verify-archive-contents.sh" "$tmp"
 for artifact in "$tmp"/*.tar.gz "$tmp"/*.zip; do
   [ -f "$artifact" ] || continue
   cosign verify-blob --bundle "${artifact}.bundle" \
