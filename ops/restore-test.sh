@@ -30,6 +30,7 @@ SELECT CASE WHEN
     WHERE x.assertion_id IS NULL GROUP BY a.memory_id,a.relationship HAVING count(*)>1)
   AND to_regprocedure('ensure_single_active_principal_assertion()') IS NOT NULL
   AND to_regprocedure('reject_principal_assertion_mutation()') IS NOT NULL
+  AND EXISTS(SELECT 1 FROM memory_revisions WHERE use_when='Testing durable backup and restore behavior.')
 THEN 'data_ok' ELSE 'data_invalid' END;" | grep -q data_ok
 
 if [ "${BACKUP_FIXTURE_ASSERTIONS:-}" = "1" ]; then

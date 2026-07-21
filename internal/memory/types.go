@@ -2,7 +2,10 @@ package memory
 
 import "time"
 
-const MaxBodyBytes = 16 * 1024
+const (
+	MaxBodyBytes    = 16 * 1024
+	MaxUseWhenBytes = 240
+)
 
 type Kind string
 
@@ -87,6 +90,7 @@ type Revision struct {
 	Number      int          `json:"number"`
 	Title       string       `json:"title"`
 	Body        string       `json:"body"`
+	UseWhen     string       `json:"use_when,omitempty"`
 	Kind        Kind         `json:"kind"`
 	Topics      []string     `json:"topics,omitempty"`
 	Provenance  []Provenance `json:"provenance"`
@@ -130,6 +134,7 @@ type Hit struct {
 	MemoryID   string   `json:"memory_id"`
 	SpaceID    string   `json:"space_id"`
 	Title      string   `json:"title"`
+	UseWhen    string   `json:"use_when,omitempty"`
 	Kind       Kind     `json:"kind"`
 	Topics     []string `json:"topics,omitempty"`
 	Excerpt    string   `json:"excerpt"`

@@ -13,7 +13,7 @@ import (
 )
 
 const memoryColumns = `m.id::text, m.space_id::text, m.status::text, m.created_at,
- r.revision, r.title, r.body, r.kind::text, r.topics, r.provenance, r.valid_until,
+ r.revision, r.title, r.body, coalesce(r.use_when,''), r.kind::text, r.topics, r.provenance, r.valid_until,
  r.content_hash, r.actor_id::text, (SELECT display_name FROM principals WHERE id=r.actor_id), r.created_at, r.reason,
  coalesce((SELECT jsonb_agg(jsonb_build_object(
    'assertion_id',a.id::text,
@@ -142,7 +142,7 @@ func (s *Store) Create(ctx context.Context, rec memory.CreateRecord) (memory.Mem
 		if tag.RowsAffected() != 1 {
 			return memory.Memory{}, memory.ErrForbidden
 		}
-		if err := insertRevision(ctx, tx, rec.NewID, 1, rec.Title, rec.Body, rec.Kind, rec.Topics, rec.Provenance,
+		if err := insertRevision(ctx, tx, rec.NewID, 1, rec.Title, rec.Body, rec.UseWhen, rec.Kind, rec.Topics, rec.Provenance,
 			rec.ValidUntil, rec.ContentHash, rec.PrincipalID, rec.Reason, rec.Now, rec.Embedding); err != nil {
 			return memory.Memory{}, err
 		}
@@ -173,7 +173,7 @@ func (s *Store) Revise(ctx context.Context, rec memory.ReviseRecord) (memory.Mem
 		if tag.RowsAffected() != 1 {
 			return memory.Memory{}, memory.ErrConflict
 		}
-		if err := insertRevision(ctx, tx, rec.MemoryID, next, rec.Title, rec.Body, rec.Kind, rec.Topics, rec.Provenance,
+		if err := insertRevision(ctx, tx, rec.MemoryID, next, rec.Title, rec.Body, rec.UseWhen, rec.Kind, rec.Topics, rec.Provenance,
 			rec.ValidUntil, rec.ContentHash, rec.PrincipalID, rec.Reason, rec.Now, rec.Embedding); err != nil {
 			return memory.Memory{}, err
 		}
@@ -234,15 +234,15 @@ func (s *Store) mutate(ctx context.Context, operation, principal, key, requestHa
 	return mem, nil
 }
 
-func insertRevision(ctx context.Context, tx pgx.Tx, id string, revision int, title, body string, kind memory.Kind,
+func insertRevision(ctx context.Context, tx pgx.Tx, id string, revision int, title, body, useWhen string, kind memory.Kind,
 	topics []string, provenance []memory.Provenance, validUntil any, hash, actor, reason string, createdAt any, embedding []float32) error {
 	provenanceJSON, err := json.Marshal(provenance)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO memory_revisions
- (memory_id,revision,title,body,kind,topics,provenance,valid_until,content_hash,actor_id,reason,created_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, revision, title, body, kind, topics,
+ (memory_id,revision,title,body,use_when,kind,topics,provenance,valid_until,content_hash,actor_id,reason,created_at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, id, revision, title, body, nullIfEmpty(useWhen), kind, topics,
 		provenanceJSON, validUntil, hash, actor, reason, createdAt)
 	if err != nil {
 		return err
@@ -280,7 +280,7 @@ func scanMemory(row rowScanner) (memory.Memory, error) {
 	var kind, status string
 	var provenanceJSON, associationsJSON []byte
 	err := row.Scan(&mem.ID, &mem.SpaceID, &status, &mem.CreatedAt,
-		&mem.CurrentRevision.Number, &mem.CurrentRevision.Title, &mem.CurrentRevision.Body, &kind,
+		&mem.CurrentRevision.Number, &mem.CurrentRevision.Title, &mem.CurrentRevision.Body, &mem.CurrentRevision.UseWhen, &kind,
 		&mem.CurrentRevision.Topics, &provenanceJSON, &mem.CurrentRevision.ValidUntil,
 		&mem.CurrentRevision.ContentHash, &mem.CurrentRevision.ActorID, &mem.CurrentRevision.ActorDisplayName, &mem.CurrentRevision.CreatedAt, &mem.CurrentRevision.Reason,
 		&associationsJSON)
@@ -304,6 +304,13 @@ func mapConflict(err error) error {
 		return memory.ErrDuplicate
 	}
 	return err
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) (memory.RepositoryBrowseResult, error) {
@@ -389,7 +396,7 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) (memory.Reposi
 	}
 	rows, err := s.pool.Query(ctx, `
  WITH eligible AS (
-   SELECT m.id,m.space_id,m.current_revision,r.title,r.body,r.kind,r.topics,r.provenance,r.search_document,e.embedding
+   SELECT m.id,m.space_id,m.current_revision,r.title,r.body,coalesce(r.use_when,'') use_when,r.kind,r.topics,r.provenance,r.search_document,e.embedding
    FROM memories m JOIN memory_revisions r ON r.memory_id=m.id AND r.revision=m.current_revision
    LEFT JOIN memory_embeddings e ON e.memory_id=r.memory_id AND e.revision=r.revision
 	 WHERE m.space_id=ANY($2::uuid[])
@@ -419,7 +426,7 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) (memory.Reposi
    FROM eligible e LEFT JOIN keyword k USING(id) LEFT JOIN semantic s USING(id)
    WHERE k.id IS NOT NULL OR s.id IS NOT NULL
  )
- SELECT id::text,space_id::text,title,kind::text,topics[1:6],CASE WHEN length(regexp_replace(body,'\\s+',' ','g'))<=400
+ SELECT id::text,space_id::text,title,use_when,kind::text,topics[1:6],CASE WHEN length(regexp_replace(body,'\\s+',' ','g'))<=400
    THEN left(regexp_replace(body,'\\s+',' ','g'),greatest(length(regexp_replace(body,'\\s+',' ','g'))-1,0))||'…'
    ELSE left(regexp_replace(body,'\\s+',' ','g'),399)||'…' END,
  current_revision,score,coalesce(provenance->0->>'class','unverified'),count(*) OVER()::integer
@@ -435,7 +442,7 @@ func (s *Store) Recall(ctx context.Context, q memory.RecallQuery) (memory.Reposi
 	for rows.Next() {
 		var h memory.Hit
 		var kind string
-		if err := rows.Scan(&h.MemoryID, &h.SpaceID, &h.Title, &kind, &h.Topics, &h.Excerpt, &h.Revision, &h.Score, &h.Provenance, &total); err != nil {
+		if err := rows.Scan(&h.MemoryID, &h.SpaceID, &h.Title, &h.UseWhen, &kind, &h.Topics, &h.Excerpt, &h.Revision, &h.Score, &h.Provenance, &total); err != nil {
 			return memory.RepositoryRecallResult{}, err
 		}
 		h.Kind = memory.Kind(kind)

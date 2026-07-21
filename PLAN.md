@@ -91,7 +91,7 @@ Expose these MCP tools:
 - catalog(workspace_claims?, cursor?)
 - recall(query, workspace_claims?, space_ids?, kinds?, topics?, limit?, cursor?)
 - read_memory(memory_id)
-- remember(target_space_id | workspace_claims, title, body, kind, topics, provenance?, valid_until?, reason, idempotency_key, duplicate_resolution?)
+- remember(target_space_id | workspace_claims, title, body, use_when?, kind, topics, provenance?, valid_until?, reason, idempotency_key, duplicate_resolution?)
 - revise_memory(memory_id, expected_revision, changed_fields, provenance?, reason, idempotency_key)
 - retract_memory(memory_id, expected_revision, reason, idempotency_key)
 

@@ -66,11 +66,11 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 4 {
+	if err != nil || migrationCount != 5 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
-	cmd := memory.RememberCommand{Principal: memory.Principal{ID: agent}, SpaceID: project, Title: "Connection pool", Body: "Use a maximum of twenty database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: []memory.Provenance{{Class: "user_instruction", Locator: "conversation", Attribution: "User One"}}, Reason: "operational limit", IdempotencyKey: "create-1", ConfirmNewTopics: []string{"postgres"}}
+	cmd := memory.RememberCommand{Principal: memory.Principal{ID: agent}, SpaceID: project, Title: "Connection pool", Body: "Use a maximum of twenty database connections.", UseWhen: "Reviewing or debugging database connection limits.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: []memory.Provenance{{Class: "user_instruction", Locator: "conversation", Attribution: "User One"}}, Reason: "operational limit", IdempotencyKey: "create-1", ConfirmNewTopics: []string{"postgres"}}
 	created, err := svc.Remember(ctx, cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +130,22 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil || len(segment.HistoricalAssociations) != 1 || segment.HistoricalAssociations[0].BasisRevision != 1 || segment.HistoricalAssociations[0].AssertedBy != owner || segment.HistoricalAssociations[0].Reason == "" {
 		t.Fatalf("segment historical associations=%#v err=%v", segment.HistoricalAssociations, err)
 	}
+
+	constraintConn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, constraintErr := constraintConn.Exec(ctx, `UPDATE memory_revisions SET use_when=repeat('x',241) WHERE memory_id=$1`, created.Memory.ID)
+	constraintConn.Close(ctx)
+	if constraintErr == nil {
+		t.Fatal("database accepted use_when longer than 240 bytes")
+	}
+	plainService := memory.NewService(store, store)
+	if cueOnlyHits, err := plainService.Recall(ctx, memory.RecallQuery{Principal: cmd.Principal, Query: "debugging"}); err != nil {
+		t.Fatal(err)
+	} else if len(cueOnlyHits) != 0 {
+		t.Fatalf("use_when unexpectedly changed recall ranking: %#v", cueOnlyHits)
+	}
 	if err := store.VerifyEmbeddingFingerprint(ctx); err != nil {
 		t.Fatalf("valid active embedding fingerprint rejected: %v", err)
 	}
@@ -150,7 +166,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].MemoryID != created.Memory.ID {
+	if len(hits) != 1 || hits[0].MemoryID != created.Memory.ID || hits[0].UseWhen != cmd.UseWhen {
 		t.Fatalf("hits=%#v", hits)
 	}
 	validUntil := time.Now().UTC().Add(48 * time.Hour)
@@ -268,14 +284,14 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revised.Memory.CurrentRevision.Number != 2 {
+	if revised.Memory.CurrentRevision.Number != 2 || revised.Memory.CurrentRevision.UseWhen != "Changing or troubleshooting database pool limits." {
 		t.Fatal("revision did not advance")
 	}
-	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
