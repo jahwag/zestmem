@@ -24,6 +24,9 @@ until "$runtime" exec "$db" pg_isready -U postgres -d memory >/dev/null 2>&1; do
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/004_memory_principal_assertions.sql >/dev/null
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/005_use_when.sql >/dev/null
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/006_use_when_validation.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/007_space_use_when.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/008_content_updated_at.sql >/dev/null
+"$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/009_active_direct_roles.sql >/dev/null
 "$runtime" exec --interactive "$db" psql -v ON_ERROR_STOP=1 -U postgres -d memory < ops/backup-fixture.sql >/dev/null
 "$runtime" run --rm --network "$network" \
   --env PGHOST=postgres --env PGDATABASE=memory --env PGUSER=postgres --env PGPASSWORD=test \

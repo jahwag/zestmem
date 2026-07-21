@@ -38,9 +38,10 @@ func TestServerTeachesDurableMemoryWorkflow(t *testing.T) {
 		descriptions[tool.Name] = tool.Description
 	}
 	for tool, want := range map[string]string{
-		"catalog":  "substantial repository work",
-		"recall":   "relevant decisions",
-		"remember": "Proactively preserve",
+		"catalog":         "substantial repository work",
+		"startup_context": "host-approved",
+		"recall":          "relevant decisions",
+		"remember":        "Proactively preserve",
 	} {
 		if !strings.Contains(descriptions[tool], want) {
 			t.Errorf("%s description missing %q: %s", tool, want, descriptions[tool])

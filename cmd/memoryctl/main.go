@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bytelope/zestmem/internal/authn"
 	"github.com/bytelope/zestmem/internal/buildinfo"
+	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -42,9 +44,72 @@ func main() {
 		issueKey(ctx, conn, os.Args[2:])
 	case "revoke-key":
 		revokeKey(ctx, conn, os.Args[2:])
+	case "set-space-use-when":
+		setSpaceUseWhen(ctx, conn, os.Args[2:])
+	case "disable-principal":
+		disablePrincipal(ctx, conn, os.Args[2:])
 	default:
 		usage()
 	}
+}
+
+func setSpaceUseWhen(ctx context.Context, conn *pgx.Conn, args []string) {
+	fs := flag.NewFlagSet("set-space-use-when", flag.ExitOnError)
+	space := fs.String("space", "", "Space UUID")
+	useWhen := fs.String("use-when", "", "untrusted routing cue; empty clears it")
+	by := fs.String("by", "", "active owner Principal UUID")
+	reason := fs.String("reason", "", "operator reason")
+	fs.Parse(args)
+	if *space == "" || *by == "" || strings.TrimSpace(*reason) == "" {
+		log.Fatal("--space, --by, and --reason are required")
+	}
+	normalized, err := memory.NormalizeUseWhen(*useWhen)
+	fatal(err)
+	tx, err := conn.Begin(ctx)
+	fatal(err)
+	defer tx.Rollback(ctx)
+	requireSpaceOwner(ctx, tx, *by, *space)
+	var name string
+	err = tx.QueryRow(ctx, `UPDATE spaces s SET use_when=NULLIF($1,'')
+ WHERE s.id=$2 AND has_direct_space_role($3,s.id,'owner') RETURNING name`, normalized, *space, *by).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		log.Fatal("Space not found or --by Principal is not an active direct Owner")
+	}
+	fatal(err)
+	hash := sha256.Sum256([]byte(normalized))
+	_, err = tx.Exec(ctx, `INSERT INTO audit_events(actor_id,action,target_type,target_id,reason,metadata)
+ VALUES($1,'set_space_use_when','space',$2,$3,jsonb_build_object('cue_sha256',$4::text,'cleared',$5::boolean))`,
+		*by, *space, strings.TrimSpace(*reason), hex.EncodeToString(hash[:]), normalized == "")
+	fatal(err)
+	fatal(tx.Commit(ctx))
+	fmt.Printf("space=%s\ncue_sha256=%s\n", name, hex.EncodeToString(hash[:]))
+}
+
+func disablePrincipal(ctx context.Context, conn *pgx.Conn, args []string) {
+	fs := flag.NewFlagSet("disable-principal", flag.ExitOnError)
+	principal := fs.String("principal", "", "agent Principal UUID")
+	by := fs.String("by", "", "active owner Principal UUID")
+	reason := fs.String("reason", "", "operator reason")
+	fs.Parse(args)
+	if *principal == "" || *by == "" || strings.TrimSpace(*reason) == "" {
+		log.Fatal("--principal, --by, and --reason are required")
+	}
+	tx, err := conn.Begin(ctx)
+	fatal(err)
+	defer tx.Rollback(ctx)
+	requireOwner(ctx, tx, *by)
+	var displayName string
+	err = tx.QueryRow(ctx, `UPDATE principals SET disabled_at=now()
+ WHERE id=$1 AND type='agent' AND disabled_at IS NULL RETURNING display_name`, *principal).Scan(&displayName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		log.Fatal("active agent Principal not found")
+	}
+	fatal(err)
+	_, err = tx.Exec(ctx, `INSERT INTO audit_events(actor_id,action,target_type,target_id,reason)
+ VALUES($1,'disable_principal','principal',$2,$3)`, *by, *principal, strings.TrimSpace(*reason))
+	fatal(err)
+	fatal(tx.Commit(ctx))
+	fmt.Printf("disabled=%s\n", displayName)
 }
 
 func bootstrap(ctx context.Context, conn *pgx.Conn, args []string) {
@@ -208,11 +273,25 @@ func normalizeClaim(kind, value string) string {
 }
 func requireOwner(ctx context.Context, tx pgx.Tx, principal string) {
 	var allowed bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM principals p JOIN space_grants g ON g.principal_id=p.id WHERE p.id=$1 AND p.disabled_at IS NULL AND g.role='owner')`, principal).Scan(&allowed)
-	fatal(err)
-	if !allowed {
+	err := tx.QueryRow(ctx, `SELECT true FROM principals p JOIN space_grants g ON g.principal_id=p.id
+ WHERE p.id=$1 AND p.disabled_at IS NULL AND g.role='owner' LIMIT 1 FOR UPDATE OF p,g`, principal).Scan(&allowed)
+	if errors.Is(err, pgx.ErrNoRows) {
 		log.Fatal("--by Principal must be an active Space Owner")
 	}
+	fatal(err)
+}
+
+func requireSpaceOwner(ctx context.Context, tx pgx.Tx, principal, space string) {
+	var allowed bool
+	err := tx.QueryRow(ctx, `SELECT true FROM principals p
+ JOIN space_grants g ON g.principal_id=p.id
+ JOIN spaces s ON s.id=g.space_id
+ WHERE p.id=$1 AND s.id=$2 AND p.disabled_at IS NULL AND s.suspended_at IS NULL AND g.role='owner'
+ FOR UPDATE OF p,g,s`, principal, space).Scan(&allowed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		log.Fatal("--by Principal must be an active Owner of --space")
+	}
+	fatal(err)
 }
 func required(name string) string {
 	value := os.Getenv(name)
@@ -227,6 +306,6 @@ func fatal(err error) {
 	}
 }
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: memoryctl <bootstrap|create-principal|create-space|grant|bind-workspace|issue-key|revoke-key> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: memoryctl <bootstrap|create-principal|create-space|grant|bind-workspace|issue-key|revoke-key|set-space-use-when|disable-principal> [flags]")
 	os.Exit(2)
 }

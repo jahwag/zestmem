@@ -132,8 +132,8 @@ func (s *Store) FindSimilar(ctx context.Context, principalID, spaceID, text stri
 func (s *Store) Create(ctx context.Context, rec memory.CreateRecord) (memory.Memory, error) {
 	return s.mutate(ctx, "remember", rec.PrincipalID, rec.IdempotencyKey, rec.RequestHash, func(tx pgx.Tx) (memory.Memory, error) {
 		tag, err := tx.Exec(ctx, `INSERT INTO memories
- (id,space_id,status,current_revision,content_hash,created_by,created_at)
- SELECT $1,$2,'active',1,$3,$4,$5 WHERE EXISTS(
+ (id,space_id,status,current_revision,content_hash,created_by,created_at,content_updated_at)
+ SELECT $1,$2,'active',1,$3,$4,$5,$5 WHERE EXISTS(
 	 SELECT 1 WHERE has_direct_space_role($4,$2,'contributor'))`,
 			rec.NewID, rec.SpaceID, rec.ContentHash, rec.PrincipalID, rec.Now)
 		if err != nil {
@@ -164,9 +164,11 @@ func (s *Store) ReadAuthorized(ctx context.Context, id string, principal memory.
 func (s *Store) Revise(ctx context.Context, rec memory.ReviseRecord) (memory.Memory, error) {
 	return s.mutate(ctx, "revise", rec.PrincipalID, rec.IdempotencyKey, rec.RequestHash, func(tx pgx.Tx) (memory.Memory, error) {
 		next := rec.ExpectedRevision + 1
-		tag, err := tx.Exec(ctx, `UPDATE memories m SET current_revision=$1,content_hash=$2
+		tag, err := tx.Exec(ctx, `UPDATE memories m SET current_revision=$1,content_hash=$2,
+ content_updated_at=CASE WHEN $6 THEN content_updated_at ELSE $7 END
  WHERE m.id=$3 AND m.current_revision=$4 AND m.status='active' AND EXISTS(
-	 SELECT 1 WHERE has_direct_space_role($5,m.space_id,'contributor'))`, next, rec.ContentHash, rec.MemoryID, rec.ExpectedRevision, rec.PrincipalID)
+	 SELECT 1 WHERE has_direct_space_role($5,m.space_id,'contributor'))`, next, rec.ContentHash, rec.MemoryID, rec.ExpectedRevision,
+			rec.PrincipalID, rec.PreserveContentUpdatedAt, rec.Now)
 		if err != nil {
 			return memory.Memory{}, mapConflict(err)
 		}
@@ -176,6 +178,21 @@ func (s *Store) Revise(ctx context.Context, rec memory.ReviseRecord) (memory.Mem
 		if err := insertRevision(ctx, tx, rec.MemoryID, next, rec.Title, rec.Body, rec.UseWhen, rec.Kind, rec.Topics, rec.Provenance,
 			rec.ValidUntil, rec.ContentHash, rec.PrincipalID, rec.Reason, rec.Now, rec.Embedding); err != nil {
 			return memory.Memory{}, err
+		}
+		if rec.ReuseEmbeddingRevision > 0 {
+			if len(rec.Embedding) != 0 {
+				return memory.Memory{}, errors.New("revision cannot both reuse and replace an embedding")
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO memory_embeddings
+ (memory_id,revision,embedding,provider,model,model_revision,dimensions,normalization,query_prefix,document_prefix,created_at)
+ SELECT memory_id,$2,embedding,provider,model,model_revision,dimensions,normalization,query_prefix,document_prefix,created_at
+ FROM memory_embeddings WHERE memory_id=$1 AND revision=$3`, rec.MemoryID, next, rec.ReuseEmbeddingRevision)
+			if err != nil {
+				return memory.Memory{}, err
+			}
+			if tag.RowsAffected() != 1 {
+				return memory.Memory{}, errors.New("source revision embedding is missing")
+			}
 		}
 		return getTx(ctx, tx, rec.MemoryID)
 	})
@@ -333,7 +350,7 @@ func (s *Store) Browse(ctx context.Context, q memory.BrowseQuery) (memory.Reposi
    CASE WHEN length(regexp_replace(r.body,'\\s+',' ','g'))>280
      THEN left(regexp_replace(r.body,'\\s+',' ','g'),279)||'…'
      ELSE regexp_replace(r.body,'\\s+',' ','g') END AS excerpt,
-   m.current_revision,r.created_at updated_at
+   m.current_revision,m.content_updated_at updated_at
  FROM memories m JOIN memory_revisions r
    ON r.memory_id=m.id AND r.revision=m.current_revision
  WHERE m.space_id=ANY($1::uuid[])
@@ -462,7 +479,7 @@ func (s *Store) Catalog(ctx context.Context, principalID string, readable []stri
 			claimValues = append(claimValues, value)
 		}
 	}
-	rows, err := s.pool.Query(ctx, `SELECT s.id::text,s.name,s.slug,s.type::text,
+	rows, err := s.pool.Query(ctx, `SELECT s.id::text,s.name,s.slug,s.type::text,coalesce(s.use_when,''),
    coalesce((SELECT array_agg(topic ORDER BY count DESC,topic) FROM (
      SELECT topic,count(*) count FROM memories m JOIN memory_revisions r
        ON r.memory_id=m.id AND r.revision=m.current_revision,unnest(r.topics) topic
@@ -479,7 +496,7 @@ func (s *Store) Catalog(ctx context.Context, principalID string, readable []stri
 	var out []memory.CatalogEntry
 	for rows.Next() {
 		var entry memory.CatalogEntry
-		if err := rows.Scan(&entry.SpaceID, &entry.Name, &entry.Slug, &entry.Type, &entry.Topics); err != nil {
+		if err := rows.Scan(&entry.SpaceID, &entry.Name, &entry.Slug, &entry.Type, &entry.UseWhen, &entry.Topics); err != nil {
 			return nil, err
 		}
 		out = append(out, entry)

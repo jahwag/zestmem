@@ -1,8 +1,8 @@
 INSERT INTO principals(id,type,display_name) VALUES
 ('00000000-0000-0000-0000-000000000001','human','Backup Owner'),
 ('00000000-0000-0000-0000-000000000004','agent','Backup Agent');
-INSERT INTO spaces(id,type,name,slug) VALUES
-('00000000-0000-0000-0000-000000000002','organization','Backup Org','backup-org');
+INSERT INTO spaces(id,type,name,slug,use_when) VALUES
+('00000000-0000-0000-0000-000000000002','organization','Backup Org','backup-org','Testing startup routing metadata backup and restore behavior.');
 INSERT INTO space_grants(principal_id,space_id,role,granted_by) VALUES
 ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','owner','00000000-0000-0000-0000-000000000001');
 INSERT INTO memories(id,space_id,status,current_revision,content_hash,created_by,created_at) VALUES

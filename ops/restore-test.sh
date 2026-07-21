@@ -31,7 +31,11 @@ SELECT CASE WHEN
   AND to_regprocedure('ensure_single_active_principal_assertion()') IS NOT NULL
   AND to_regprocedure('reject_principal_assertion_mutation()') IS NOT NULL
   AND to_regprocedure('zestmem_use_when_is_safe(text)') IS NOT NULL
-  AND EXISTS(SELECT 1 FROM memory_revisions WHERE use_when='Testing durable backup and restore behavior.')
+  AND NOT EXISTS(SELECT 1 FROM memory_revisions WHERE use_when IS NOT NULL AND
+    (octet_length(use_when) NOT BETWEEN 1 AND 240 OR use_when<>btrim(use_when) OR NOT zestmem_use_when_is_safe(use_when)))
+  AND NOT EXISTS(SELECT 1 FROM spaces WHERE use_when IS NOT NULL AND
+    (octet_length(use_when) NOT BETWEEN 1 AND 240 OR use_when<>btrim(use_when) OR NOT zestmem_use_when_is_safe(use_when)))
+  AND NOT EXISTS(SELECT 1 FROM memories WHERE content_updated_at IS NULL)
 THEN 'data_ok' ELSE 'data_invalid' END;" | grep -q data_ok
 
 if [ "${BACKUP_FIXTURE_ASSERTIONS:-}" = "1" ]; then
@@ -39,6 +43,8 @@ if [ "${BACKUP_FIXTURE_ASSERTIONS:-}" = "1" ]; then
   SELECT CASE WHEN
     (SELECT count(*) FROM memory_principal_assertions)=2
     AND (SELECT count(*) FROM memory_principal_assertion_retractions)=1
+    AND EXISTS(SELECT 1 FROM memory_revisions WHERE use_when='Testing durable backup and restore behavior.')
+    AND EXISTS(SELECT 1 FROM spaces WHERE use_when='Testing startup routing metadata backup and restore behavior.')
     AND (SELECT count(*) FROM memory_principal_assertions a
          LEFT JOIN memory_principal_assertion_retractions x ON x.assertion_id=a.id
          WHERE x.assertion_id IS NULL AND a.id='00000000-0000-0000-0000-000000000006')=1

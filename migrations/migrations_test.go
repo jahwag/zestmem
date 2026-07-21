@@ -7,8 +7,8 @@ func TestLoadIncludesOnlyOrderedForwardMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 6 {
-		t.Fatalf("migration count=%d, want 6", len(loaded))
+	if len(loaded) != 9 {
+		t.Fatalf("migration count=%d, want 9", len(loaded))
 	}
 	if loaded[0].version != 1 || loaded[0].name != "init" {
 		t.Fatalf("first migration=%+v", loaded[0])
@@ -27,6 +27,15 @@ func TestLoadIncludesOnlyOrderedForwardMigrations(t *testing.T) {
 	}
 	if loaded[5].version != 6 || loaded[5].name != "use_when_validation" {
 		t.Fatalf("sixth migration=%+v", loaded[5])
+	}
+	if loaded[6].version != 7 || loaded[6].name != "space_use_when" {
+		t.Fatalf("seventh migration=%+v", loaded[6])
+	}
+	if loaded[7].version != 8 || loaded[7].name != "content_updated_at" {
+		t.Fatalf("eighth migration=%+v", loaded[7])
+	}
+	if loaded[8].version != 9 || loaded[8].name != "active_direct_roles" {
+		t.Fatalf("ninth migration=%+v", loaded[8])
 	}
 	for _, migration := range loaded {
 		if len(migration.checksum) != 64 {

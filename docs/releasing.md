@@ -33,6 +33,14 @@ Restore the paired pre-deployment database for a production rollback. Numbered
 `.down.sql` files are development aids and must never be used to discard live
 data without an explicit export and operator review.
 
+For a reviewed `use_when` backfill, retain a second restore-tested backup after
+the new schema is running but before the first cue revision. Pair it with the
+new binaries. Freeze mutation-capable clients across both backup and backfill,
+apply a one-entry canary from the exact hashed manifest, and revoke the
+temporary migration Principal after full current-state verification. A rollback
+after backfill restores the post-schema/pre-backfill pair; do not delete
+immutable revision history in place.
+
 The SLSA reusable workflow is pinned to its required full version tag rather
 than a commit SHA because GitHub's reusable-workflow verifier binds provenance
 to that public tag. This is the sole action pinning exception.
