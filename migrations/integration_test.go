@@ -74,8 +74,16 @@ func TestApplyCreatesAndRechecksFreshDatabase(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(versions) != "[1 2 3 4]" {
+	if fmt.Sprint(versions) != "[1 2 3 4 5]" {
 		t.Fatalf("applied versions=%v", versions)
+	}
+	var nullableUseWhen bool
+	if err := pool.QueryRow(ctx, `SELECT is_nullable='YES' FROM information_schema.columns
+ WHERE table_schema='public' AND table_name='memory_revisions' AND column_name='use_when'`).Scan(&nullableUseWhen); err != nil {
+		t.Fatal(err)
+	}
+	if !nullableUseWhen {
+		t.Fatal("nullable memory_revisions.use_when was not installed")
 	}
 	var authorizationFunctions bool
 	if err := pool.QueryRow(ctx, `SELECT to_regprocedure('readable_space_ids(uuid)') IS NOT NULL

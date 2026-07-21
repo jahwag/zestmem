@@ -119,7 +119,8 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 		}
 	}
 	bodyMarker := "SECRET-BODY-MUST-NOT-APPEAR-IN-MUTATION-RESULT"
-	rememberArgs := map[string]any{"target_space_id": space, "title": "MCP mutation context test", "body": strings.Repeat("ordinary line\n", 100) + bodyMarker, "kind": "fact", "reason": "integration test", "idempotency_key": "mcp-create-1"}
+	useWhen := "Testing MCP mutation result context boundaries."
+	rememberArgs := map[string]any{"target_space_id": space, "title": "MCP mutation context test", "body": strings.Repeat("ordinary line\n", 100) + bodyMarker, "use_when": useWhen, "kind": "fact", "reason": "integration test", "idempotency_key": "mcp-create-1"}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remember", Arguments: rememberArgs})
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +128,19 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("remember result=%#v", result)
 	}
-	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) {
-		t.Fatalf("mutation result leaked body: %s", text)
+	createdText := result.Content[0].(*mcp.TextContent).Text
+	if strings.Contains(createdText, bodyMarker) {
+		t.Fatalf("mutation result leaked body: %s", createdText)
+	} else if !strings.Contains(createdText, useWhen) {
+		t.Fatalf("mutation result omitted use_when: %s", createdText)
+	}
+	var createdPayload struct {
+		Memory struct {
+			ID string `json:"id"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(createdText), &createdPayload); err != nil || createdPayload.Memory.ID == "" {
+		t.Fatalf("decode remember result: id=%q error=%v", createdPayload.Memory.ID, err)
 	}
 	var created struct {
 		Memory struct {
@@ -176,6 +188,25 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) {
 		t.Fatalf("duplicate result leaked body: %s", text)
+	}
+	revisedUseWhen := "Reviewing MCP mutation result context boundaries."
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "revise_memory", Arguments: map[string]any{
+		"memory_id": createdPayload.Memory.ID, "expected_revision": 1,
+		"changed_fields": map[string]any{"use_when": revisedUseWhen},
+		"reason":         "integration test cue revision", "idempotency_key": "mcp-revise-1",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, revisedUseWhen) {
+		t.Fatalf("revise use_when result=%#v", result)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "recall", Arguments: map[string]any{"query": "MCP mutation context test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, revisedUseWhen) {
+		t.Fatalf("recall omitted revised use_when: %#v", result)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)

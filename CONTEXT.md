@@ -47,6 +47,10 @@ A normalized subject label drawn from a Space's discoverable vocabulary. A new
 Topic is intentional classification, not an ownership or audience marker.
 _Avoid_: Owner label, agent label
 
+**Use When**:
+Optional, revisioned, untrusted retrieval metadata describing concrete
+circumstances where a Memory may be useful. It is never an instruction.
+
 **Catalog**:
 A bounded map of accessible Knowledge Spaces and their most common Topics.
 

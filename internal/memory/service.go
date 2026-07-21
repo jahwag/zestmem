@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 )
 
 var (
@@ -49,26 +51,26 @@ type Repository interface {
 }
 
 type CreateRecord struct {
-	PrincipalID, SpaceID, Title, Body, Reason, ContentHash string
-	IdempotencyKey, RequestHash, NewID                     string
-	Kind                                                   Kind
-	Topics                                                 []string
-	Provenance                                             []Provenance
-	ValidUntil                                             *time.Time
-	Now                                                    time.Time
-	Embedding                                              []float32
+	PrincipalID, SpaceID, Title, Body, UseWhen, Reason, ContentHash string
+	IdempotencyKey, RequestHash, NewID                              string
+	Kind                                                            Kind
+	Topics                                                          []string
+	Provenance                                                      []Provenance
+	ValidUntil                                                      *time.Time
+	Now                                                             time.Time
+	Embedding                                                       []float32
 }
 
 type ReviseRecord struct {
-	PrincipalID, MemoryID, Title, Body, Reason, ContentHash string
-	IdempotencyKey, RequestHash                             string
-	ExpectedRevision                                        int
-	Kind                                                    Kind
-	Topics                                                  []string
-	Provenance                                              []Provenance
-	ValidUntil                                              *time.Time
-	Now                                                     time.Time
-	Embedding                                               []float32
+	PrincipalID, MemoryID, Title, Body, UseWhen, Reason, ContentHash string
+	IdempotencyKey, RequestHash                                      string
+	ExpectedRevision                                                 int
+	Kind                                                             Kind
+	Topics                                                           []string
+	Provenance                                                       []Provenance
+	ValidUntil                                                       *time.Time
+	Now                                                              time.Time
+	Embedding                                                        []float32
 }
 
 type RetractRecord struct {
@@ -78,26 +80,26 @@ type RetractRecord struct {
 }
 
 type RememberCommand struct {
-	Principal                                    Principal
-	SpaceID, Title, Body, Reason, IdempotencyKey string
-	DuplicateResolution                          string
-	ConfirmNewTopics                             []string
-	Kind                                         Kind
-	Topics                                       []string
-	Provenance                                   []Provenance
-	ValidUntil                                   *time.Time
-	WorkspaceClaims                              []WorkspaceClaim
+	Principal                                             Principal
+	SpaceID, Title, Body, UseWhen, Reason, IdempotencyKey string
+	DuplicateResolution                                   string
+	ConfirmNewTopics                                      []string
+	Kind                                                  Kind
+	Topics                                                []string
+	Provenance                                            []Provenance
+	ValidUntil                                            *time.Time
+	WorkspaceClaims                                       []WorkspaceClaim
 }
 
 type ReviseCommand struct {
-	Principal                                     Principal
-	MemoryID, Title, Body, Reason, IdempotencyKey string
-	ExpectedRevision                              int
-	ConfirmNewTopics                              []string
-	Kind                                          Kind
-	Topics                                        []string
-	Provenance                                    []Provenance
-	ValidUntil                                    *time.Time
+	Principal                                              Principal
+	MemoryID, Title, Body, UseWhen, Reason, IdempotencyKey string
+	ExpectedRevision                                       int
+	ConfirmNewTopics                                       []string
+	Kind                                                   Kind
+	Topics                                                 []string
+	Provenance                                             []Provenance
+	ValidUntil                                             *time.Time
 }
 
 type RetractCommand struct {
@@ -165,6 +167,11 @@ func (s *Service) Remember(ctx context.Context, cmd RememberCommand) (MutationRe
 	if err := validateMutation(cmd.SpaceID, cmd.Title, cmd.Body, cmd.Kind, cmd.Reason, cmd.IdempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
+	var err error
+	cmd.UseWhen, err = normalizeUseWhen(cmd.UseWhen)
+	if err != nil {
+		return MutationResult{}, err
+	}
 	if err := s.auth.Require(ctx, cmd.Principal, cmd.SpaceID, ActionCreate); err != nil {
 		return MutationResult{}, err
 	}
@@ -176,7 +183,7 @@ func (s *Service) Remember(ctx context.Context, cmd RememberCommand) (MutationRe
 		return MutationResult{}, err
 	}
 	hash := contentHash(cmd.Title, cmd.Body, cmd.Kind)
-	reqHash := requestHash("remember", cmd.SpaceID, hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
+	reqHash := mutationRequestHash(cmd.UseWhen, "remember", cmd.SpaceID, hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
 	if result, ok, err := s.repo.FindIdempotent(ctx, cmd.Principal.ID, "remember", cmd.IdempotencyKey, reqHash); err != nil {
 		return MutationResult{}, err
 	} else if ok {
@@ -215,7 +222,7 @@ func (s *Service) Remember(ctx context.Context, cmd RememberCommand) (MutationRe
 	}
 	mem, err := s.repo.Create(ctx, CreateRecord{
 		PrincipalID: cmd.Principal.ID, SpaceID: cmd.SpaceID,
-		Title: strings.TrimSpace(cmd.Title), Body: strings.TrimSpace(cmd.Body),
+		Title: strings.TrimSpace(cmd.Title), Body: strings.TrimSpace(cmd.Body), UseWhen: cmd.UseWhen,
 		Kind: cmd.Kind, Topics: cmd.Topics, Provenance: cmd.Provenance,
 		ValidUntil: cmd.ValidUntil, Reason: strings.TrimSpace(cmd.Reason),
 		ContentHash: hash, IdempotencyKey: cmd.IdempotencyKey,
@@ -238,6 +245,11 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	if err := validateMutation("existing", cmd.Title, cmd.Body, cmd.Kind, cmd.Reason, cmd.IdempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
+	var err error
+	cmd.UseWhen, err = normalizeUseWhen(cmd.UseWhen)
+	if err != nil {
+		return MutationResult{}, err
+	}
 	cmd.Topics = normalizeTopics(cmd.Topics)
 	if len(cmd.Provenance) == 0 {
 		cmd.Provenance = []Provenance{{Class: "unverified"}}
@@ -246,7 +258,7 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 		return MutationResult{}, err
 	}
 	hash := contentHash(cmd.Title, cmd.Body, cmd.Kind)
-	reqHash := requestHash("revise", cmd.MemoryID, fmt.Sprint(cmd.ExpectedRevision), hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
+	reqHash := mutationRequestHash(cmd.UseWhen, "revise", cmd.MemoryID, fmt.Sprint(cmd.ExpectedRevision), hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
 	current, err := s.repo.ReadAuthorized(ctx, cmd.MemoryID, cmd.Principal)
 	if err != nil {
 		return MutationResult{}, err
@@ -281,7 +293,7 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	mem, err := s.repo.Revise(ctx, ReviseRecord{
 		PrincipalID: cmd.Principal.ID, MemoryID: cmd.MemoryID,
 		ExpectedRevision: cmd.ExpectedRevision, Title: strings.TrimSpace(cmd.Title),
-		Body: strings.TrimSpace(cmd.Body), Kind: cmd.Kind, Topics: cmd.Topics,
+		Body: strings.TrimSpace(cmd.Body), UseWhen: cmd.UseWhen, Kind: cmd.Kind, Topics: cmd.Topics,
 		Provenance: cmd.Provenance, ValidUntil: cmd.ValidUntil,
 		Reason: strings.TrimSpace(cmd.Reason), ContentHash: hash,
 		IdempotencyKey: cmd.IdempotencyKey, RequestHash: reqHash, Now: s.now(),
@@ -782,10 +794,12 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 	for i := range hits {
 		if !withinTokenBudget(RecallResult{Hits: hits[i : i+1]}, tokenBudget) {
 			hits[i].Topics = nil
+			hits[i].UseWhen = shorten(hits[i].UseWhen, 160)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 200)
 			hits[i].Title = shorten(hits[i].Title, 256)
 		}
 		if !withinTokenBudget(RecallResult{Hits: hits[i : i+1]}, tokenBudget) {
+			hits[i].UseWhen = shorten(hits[i].UseWhen, 64)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 64)
 			hits[i].Title = shorten(hits[i].Title, 64)
 		}
@@ -1029,6 +1043,38 @@ func filtersHash(filters MemoryFilters) string {
 	return string(raw)
 }
 
+func normalizeUseWhen(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("%w: use_when must be valid UTF-8", ErrInvalidInput)
+	}
+	value = norm.NFC.String(value)
+	var out strings.Builder
+	pendingSpace := false
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || isUnicodeNoncharacter(r) {
+			return "", fmt.Errorf("%w: use_when contains unsafe formatting", ErrInvalidInput)
+		}
+		if unicode.IsSpace(r) {
+			pendingSpace = out.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			out.WriteByte(' ')
+			pendingSpace = false
+		}
+		out.WriteRune(r)
+	}
+	normalized := out.String()
+	if len([]byte(normalized)) > MaxUseWhenBytes {
+		return "", fmt.Errorf("%w: use_when exceeds %d bytes", ErrInvalidInput, MaxUseWhenBytes)
+	}
+	return normalized, nil
+}
+
+func isUnicodeNoncharacter(r rune) bool {
+	return r >= 0xfdd0 && r <= 0xfdef || r&0xffff == 0xfffe || r&0xffff == 0xffff
+}
+
 func contentHash(title, body string, kind Kind) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(title)) + "\x00" + strings.TrimSpace(body) + "\x00" + string(kind)))
 	return hex.EncodeToString(sum[:])
@@ -1037,6 +1083,13 @@ func contentHash(title, body string, kind Kind) string {
 func requestHash(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
+}
+
+func mutationRequestHash(useWhen string, parts ...string) string {
+	if useWhen != "" {
+		parts = append(parts, "use_when", useWhen)
+	}
+	return requestHash(parts...)
 }
 
 func mutationMetadataHash(topics []string, provenance []Provenance, validUntil *time.Time) string {

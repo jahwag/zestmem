@@ -347,6 +347,86 @@ func TestMetadataDiscoveryDoesNotReturnNonAdvancingCursor(t *testing.T) {
 	}
 }
 
+func TestRememberNormalizesUseWhen(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.UseWhen = "  Debugging  cafe\u0301   connection failures.  "
+	result, err := svc.Remember(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := result.Memory.CurrentRevision.UseWhen, "Debugging café connection failures."; got != want {
+		t.Fatalf("use_when=%q, want %q", got, want)
+	}
+}
+
+func TestRememberRejectsUnsafeUseWhen(t *testing.T) {
+	tests := map[string]string{
+		"newline":        "Debugging pool\nfailures",
+		"line separator": "Debugging pool\u2028failures",
+		"control":        "Debugging pool\tfailures",
+		"bidi override":  "Debugging pool \u202efailures",
+		"formatting":     "Debugging pool \u200bfailures",
+		"noncharacter":   "Debugging pool \ufdd0failures",
+		"too long":       strings.Repeat("x", MaxUseWhenBytes+1),
+		"invalid UTF-8":  string([]byte{'x', 0xff}),
+	}
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _ := testService()
+			cmd := validRemember()
+			cmd.UseWhen = value
+			_, err := svc.Remember(context.Background(), cmd)
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("error=%v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
+func TestRememberUseWhenParticipatesInIdempotency(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.UseWhen = "Debugging database connection failures."
+	if _, err := svc.Remember(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd.UseWhen = "Reviewing database connection limits."
+	_, err := svc.Remember(context.Background(), cmd)
+	if !errors.Is(err, ErrIdempotencyReuse) {
+		t.Fatalf("error=%v, want ErrIdempotencyReuse", err)
+	}
+}
+
+func TestMissingUseWhenPreservesLegacyIdempotencyHash(t *testing.T) {
+	svc, repo, _ := testService()
+	cmd := validRemember()
+	cmd.UseWhen = ""
+	if _, err := svc.Remember(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	want := requestHash("remember", cmd.SpaceID, contentHash(cmd.Title, cmd.Body, cmd.Kind), cmd.Reason,
+		mutationMetadataHash(normalizeTopics(cmd.Topics), []Provenance{{Class: "unverified"}}, nil))
+	if got := repo.requestHashes[repo.idemKey(cmd.Principal.ID, "remember", cmd.IdempotencyKey)]; got != want {
+		t.Fatalf("legacy request hash changed: got=%s want=%s", got, want)
+	}
+}
+
+func TestUseWhenDoesNotChangeContentIdentity(t *testing.T) {
+	svc, _, _ := testService()
+	cmd := validRemember()
+	cmd.UseWhen = "Debugging database connection failures."
+	if _, err := svc.Remember(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd.UseWhen = "Reviewing database connection limits."
+	cmd.IdempotencyKey = "create-2"
+	_, err := svc.Remember(context.Background(), cmd)
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("error=%v, want ErrDuplicate", err)
+	}
+}
+
 func TestRememberReturnsNearDuplicateWithoutWriting(t *testing.T) {
 	svc, repo, _ := testService()
 	repo.similar = []DuplicateCandidate{{MemoryID: "old", Title: "Existing", Score: .91}}
@@ -431,12 +511,12 @@ func TestReviseCreatesImmutableNextRevision(t *testing.T) {
 	result, err := svc.Revise(context.Background(), ReviseCommand{
 		Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID,
 		ExpectedRevision: 1, Title: "Updated", Body: "Updated body",
-		Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-1",
+		UseWhen: "Reviewing updated behavior.", Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Memory.CurrentRevision.Number != 2 || result.Memory.CurrentRevision.Body != "Updated body" {
+	if result.Memory.CurrentRevision.Number != 2 || result.Memory.CurrentRevision.Body != "Updated body" || result.Memory.CurrentRevision.UseWhen != "Reviewing updated behavior." {
 		t.Fatalf("revision = %#v", result.Memory.CurrentRevision)
 	}
 }
@@ -538,7 +618,7 @@ func TestVisibleReaderGetsForbiddenForRevision(t *testing.T) {
 func validRemember() RememberCommand {
 	return RememberCommand{
 		Principal: Principal{ID: "agent"}, SpaceID: "project",
-		Title: "A fact", Body: "Useful body", Kind: KindFact,
+		Title: "A fact", Body: "Useful body", UseWhen: "Investigating a relevant fact.", Kind: KindFact,
 		Topics: []string{" API   Design ", "Go", "go"},
 		Reason: "Operator requested durable knowledge", IdempotencyKey: "create-1",
 	}
@@ -610,7 +690,7 @@ func (r *fakeRepo) FindSimilar(context.Context, string, string, string, []float3
 }
 
 func (r *fakeRepo) Create(_ context.Context, rec CreateRecord) (Memory, error) {
-	rev := Revision{MemoryID: rec.NewID, Number: 1, Title: rec.Title, Body: rec.Body, Kind: rec.Kind,
+	rev := Revision{MemoryID: rec.NewID, Number: 1, Title: rec.Title, Body: rec.Body, UseWhen: rec.UseWhen, Kind: rec.Kind,
 		Topics: rec.Topics, Provenance: rec.Provenance, ValidUntil: rec.ValidUntil,
 		ContentHash: rec.ContentHash, ActorID: rec.PrincipalID, CreatedAt: rec.Now, Reason: rec.Reason}
 	mem := Memory{ID: rec.NewID, SpaceID: rec.SpaceID, Status: StatusActive, CurrentRevision: rev, CreatedAt: rec.Now}
@@ -642,7 +722,7 @@ func (r *fakeRepo) Revise(_ context.Context, rec ReviseRecord) (Memory, error) {
 		return Memory{}, ErrConflict
 	}
 	mem.CurrentRevision = Revision{MemoryID: rec.MemoryID, Number: rec.ExpectedRevision + 1,
-		Title: rec.Title, Body: rec.Body, Kind: rec.Kind, Topics: rec.Topics,
+		Title: rec.Title, Body: rec.Body, UseWhen: rec.UseWhen, Kind: rec.Kind, Topics: rec.Topics,
 		Provenance: rec.Provenance, ValidUntil: rec.ValidUntil, ContentHash: rec.ContentHash,
 		ActorID: rec.PrincipalID, CreatedAt: rec.Now, Reason: rec.Reason}
 	r.memories[mem.ID] = mem
@@ -738,7 +818,7 @@ func (r *fakeRepo) Recall(_ context.Context, q RecallQuery) (RepositoryRecallRes
 		}
 		hits = append(hits, Hit{MemoryID: mem.ID, SpaceID: mem.SpaceID,
 			Title: mem.CurrentRevision.Title, Kind: mem.CurrentRevision.Kind,
-			Topics: mem.CurrentRevision.Topics, Excerpt: excerpt(mem.CurrentRevision.Body, 240),
+			Topics: mem.CurrentRevision.Topics, UseWhen: mem.CurrentRevision.UseWhen, Excerpt: excerpt(mem.CurrentRevision.Body, 240),
 			Revision: mem.CurrentRevision.Number, Score: 1})
 	}
 	if len(hits) > q.Limit {
