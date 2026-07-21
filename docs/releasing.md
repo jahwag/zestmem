@@ -41,6 +41,12 @@ temporary migration Principal after full current-state verification. A rollback
 after backfill restores the post-schema/pre-backfill pair; do not delete
 immutable revision history in place.
 
+Native Linux and macOS archives contain `memoryd`, `memoryctl`,
+`memory-mcp-bridge`, and the POSIX-permission-aware `usewhen-backfill` tool.
+The Windows archive intentionally contains only the three long-lived binaries.
+Snapshot CI, both reproducible release builds, and release verification enforce
+this exact five-archive matrix before publication or installation succeeds.
+
 The SLSA reusable workflow is pinned to its required full version tag rather
 than a commit SHA because GitHub's reusable-workflow verifier binds provenance
 to that public tag. This is the sole action pinning exception.

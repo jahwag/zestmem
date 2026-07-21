@@ -42,6 +42,7 @@ builds:
 archives:
   - id: native
     ids: [memoryd, memoryctl, memory-mcp-bridge, usewhen-backfill]
+    allow_different_binary_count: true
     formats: [tar.gz]
     format_overrides:
       - goos: windows

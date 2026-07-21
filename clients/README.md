@@ -6,6 +6,17 @@ The portable baseline is the short instruction in `AGENTS.md` and `CLAUDE.md`: c
 
 Set `MEMORY_URL=https://MEMORY_HOST` and `MEMORY_TOKEN` in the agent's secret environment to enable the startup adapter. Set the non-secret `MEMORY_STARTUP_SPACE_ID` to the current project Space UUID when an agent can read many Spaces. Configure exactly one lifecycle hook per agent profile to invoke `bootstrap-catalog.sh` on start/resume/clear/compact. It prints one complete, host-approved routing envelope capped at 800 bytes; it never prints Memory cues or bodies. The script does not source repository environment files or send Git remotes. Codex requires the repository to be trusted and the hook definition to be reviewed; rejection only disables automatic bootstrap, not MCP.
 
+On a multi-user host where a loopback `mcp-proxy --stateless` sidecar already
+holds the upstream credential, use `bootstrap-mcp.sh` instead. It calls only the
+sidecar's `startup_context` tool and keeps the credential out of agent files and
+processes. The default endpoint is `http://127.0.0.1:14501/mcp`; restrict that
+port by operating-system user and install the current `memory-mcp-bridge` on
+the host. The bridge permits credential-free startup only for an explicit HTTP
+loopback IP endpoint and performs the normal MCP handshake. Do not point this
+adapter at an unprotected network listener. It fails quietly during agent
+startup; set `ZESTMEM_BOOTSTRAP_DEBUG=1` temporarily to emit terse transport or
+validation diagnostics.
+
 The host must pass `ZESTMEM_STARTUP_CUE_APPROVALS` to `memoryd` as a JSON object from Space UUID to the SHA-256 of that Space's exact `use_when` value. Keep this value in root-owned host configuration, not agent or repository configuration. Changing a Space cue suppresses it at startup until the host approves the new hash. Agents can still call `catalog` and `recall` when the hook is unavailable.
 
 For local testing in this checkout, `.codex/config.toml` and `.mcp.json` launch `memory-mcp-local.sh` with separate `codex` and `claude` profiles. The MCP wrapper reads revocable per-agent keys from the gitignored `.memory-client.env` and connects to the loopback service through `memory-mcp-bridge`. Never commit that file. The startup hook intentionally does not read it; inject startup credentials through the agent's secret environment. Replace the local wrapper configuration with the remote URL or Entra-backed bridge configuration when deploying elsewhere.
