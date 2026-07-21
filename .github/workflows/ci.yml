@@ -89,7 +89,6 @@ jobs:
         run: npx playwright install-deps chromium firefox webkit
       - run: npm run test:e2e
   snapshot:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
