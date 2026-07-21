@@ -33,10 +33,15 @@ builds:
     id: memory-mcp-bridge
     main: ./cmd/memory-mcp-bridge
     binary: memory-mcp-bridge
+  - <<: *build
+    id: usewhen-backfill
+    main: ./cmd/usewhen-backfill
+    binary: usewhen-backfill
+    goos: [linux, darwin]
 
 archives:
   - id: native
-    ids: [memoryd, memoryctl, memory-mcp-bridge]
+    ids: [memoryd, memoryctl, memory-mcp-bridge, usewhen-backfill]
     formats: [tar.gz]
     format_overrides:
       - goos: windows

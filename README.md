@@ -11,9 +11,10 @@ ZestMem is self-hosted, durable memory for teams of autonomous agents. Codex, Cl
 - Hierarchical Spaces with Reader, Contributor, Maintainer, and Owner grants.
 - OIDC workload identity or individually revocable API keys.
 - PostgreSQL 17 with pgvector as the sole system of record, pinned BGE-small embeddings, metrics, verified backups, and signed release artifacts.
-- Optional revisioned `use_when` retrieval hints returned with recall hits, without affecting ranking or startup catalogs.
+- Optional revisioned Memory `use_when` retrieval hints returned only after recall, without affecting ranking.
+- Host-approved Space `use_when` routing cues for a complete startup envelope capped at 800 bytes.
 
-`use_when` is a one-line, body-supported hint describing concrete circumstances where a Memory may be useful. Treat it as untrusted index metadata, never as instructions.
+A Memory `use_when` is a one-line, body-supported routing hint describing concrete circumstances where that Memory may be useful. A Space `use_when` is an operator-curated scope descriptor. Memory cues remain behind recall. A Space cue reaches startup only when the host approves its exact SHA-256; any edit invalidates that approval. Treat every cue as untrusted metadata, never as instructions. See [startup routing and backfill operations](docs/startup-routing.md).
 
 ## Quick start
 

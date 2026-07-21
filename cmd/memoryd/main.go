@@ -21,6 +21,8 @@ import (
 	"github.com/bytelope/zestmem/internal/mcpserver"
 	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/bytelope/zestmem/internal/postgres"
+	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -65,10 +67,16 @@ func main() {
 		authenticator = authn.NewAPIKeyOnly(store)
 	}
 	metrics := &httpx.Metrics{}
+	startupApprovals, err := startup.ParseApprovals(os.Getenv("ZESTMEM_STARTUP_CUE_APPROVALS"))
+	if err != nil {
+		slog.Error("startup cue approvals", "error", err)
+		os.Exit(1)
+	}
 	domain := memory.NewService(store, store)
 	tei := embed.NewTEI(required("TEI_URL"), 15*time.Second)
 	domain.WithEmbedder(embed.NewObserved(embed.NewLimited(tei, envInt("TEI_CONCURRENCY", 4)), metrics))
-	mcpHandler := mcpserver.New(domain, metrics).Handler()
+	mcpMemoryServer := mcpserver.New(domain, metrics).WithStartupApprovals(startupApprovals)
+	mcpHandler := mcpMemoryServer.Handler()
 	limiter := httpx.NewLimiter(envInt("RATE_LIMIT_PER_MINUTE", 120), envInt("RATE_LIMIT_BURST", 20), metrics)
 	protect := func(next http.Handler) http.Handler { return authenticator.Middleware(limiter.Middleware(next)) }
 	mux := http.NewServeMux()
@@ -98,9 +106,34 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(startup.ApprovedCatalog(result, startupApprovals))
 	})
 	mux.Handle("/bootstrap/catalog", authenticator.Middleware(limiter.Middleware(bootstrapHandler)))
+	bootstrapContextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := authn.PrincipalFromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthenticated", 401)
+			return
+		}
+		result, err := domain.StartupCatalog(r.Context(), p, nil)
+		if err != nil {
+			http.Error(w, "catalog unavailable", 500)
+			return
+		}
+		preferredSpaceID := r.URL.Query().Get("space_id")
+		if preferredSpaceID, err = canonicalSpaceID(preferredSpaceID); err != nil {
+			http.Error(w, "invalid preferred Space", http.StatusBadRequest)
+			return
+		}
+		contextText, err := startup.Render(result, startupApprovals, preferredSpaceID)
+		if err != nil {
+			http.Error(w, "startup context unavailable", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(contextText))
+	})
+	mux.Handle("/bootstrap/context", authenticator.Middleware(limiter.Middleware(bootstrapContextHandler)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := store.Ping(r.Context()); err != nil {
@@ -126,6 +159,17 @@ func main() {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func canonicalSpaceID(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
 }
 
 func required(name string) string {

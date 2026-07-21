@@ -153,6 +153,7 @@ type CatalogEntry struct {
 	Name    string   `json:"name"`
 	Slug    string   `json:"slug"`
 	Type    string   `json:"type"`
+	UseWhen string   `json:"use_when,omitempty"`
 	Topics  []string `json:"topics,omitempty"`
 }
 

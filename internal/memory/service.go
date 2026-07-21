@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,8 @@ type ReviseRecord struct {
 	ValidUntil                                                       *time.Time
 	Now                                                              time.Time
 	Embedding                                                        []float32
+	ReuseEmbeddingRevision                                           int
+	PreserveContentUpdatedAt                                         bool
 }
 
 type RetractRecord struct {
@@ -95,6 +98,7 @@ type ReviseCommand struct {
 	Principal                                              Principal
 	MemoryID, Title, Body, UseWhen, Reason, IdempotencyKey string
 	ExpectedRevision                                       int
+	UseWhenSet                                             bool
 	ConfirmNewTopics                                       []string
 	Kind                                                   Kind
 	Topics                                                 []string
@@ -168,7 +172,7 @@ func (s *Service) Remember(ctx context.Context, cmd RememberCommand) (MutationRe
 		return MutationResult{}, err
 	}
 	var err error
-	cmd.UseWhen, err = normalizeUseWhen(cmd.UseWhen)
+	cmd.UseWhen, err = NormalizeUseWhen(cmd.UseWhen)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -245,11 +249,6 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	if err := validateMutation("existing", cmd.Title, cmd.Body, cmd.Kind, cmd.Reason, cmd.IdempotencyKey); err != nil {
 		return MutationResult{}, err
 	}
-	var err error
-	cmd.UseWhen, err = normalizeUseWhen(cmd.UseWhen)
-	if err != nil {
-		return MutationResult{}, err
-	}
 	cmd.Topics = normalizeTopics(cmd.Topics)
 	if len(cmd.Provenance) == 0 {
 		cmd.Provenance = []Provenance{{Class: "unverified"}}
@@ -258,7 +257,6 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 		return MutationResult{}, err
 	}
 	hash := contentHash(cmd.Title, cmd.Body, cmd.Kind)
-	reqHash := mutationRequestHash(cmd.UseWhen, "revise", cmd.MemoryID, fmt.Sprint(cmd.ExpectedRevision), hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
 	current, err := s.repo.ReadAuthorized(ctx, cmd.MemoryID, cmd.Principal)
 	if err != nil {
 		return MutationResult{}, err
@@ -266,6 +264,18 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	if err := s.auth.Require(ctx, cmd.Principal, current.SpaceID, ActionRevise); err != nil {
 		return MutationResult{}, err
 	}
+	if !cmd.UseWhenSet {
+		cmd.UseWhen = current.CurrentRevision.UseWhen
+	}
+	cmd.UseWhen, err = NormalizeUseWhen(cmd.UseWhen)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	substantiveUnchanged := sameSubstantiveRevision(current.CurrentRevision, cmd)
+	if current.CurrentRevision.UseWhen != "" && !substantiveUnchanged && !cmd.UseWhenSet {
+		return MutationResult{}, fmt.Errorf("%w: use_when must be explicitly preserved, replaced, or cleared when substantive fields change", ErrInvalidInput)
+	}
+	reqHash := mutationRequestHash(cmd.UseWhen, "revise", cmd.MemoryID, fmt.Sprint(cmd.ExpectedRevision), hash, strings.TrimSpace(cmd.Reason), mutationMetadataHash(cmd.Topics, cmd.Provenance, cmd.ValidUntil))
 	if result, ok, err := s.repo.FindIdempotent(ctx, cmd.Principal.ID, "revise", cmd.IdempotencyKey, reqHash); err != nil {
 		return MutationResult{}, err
 	} else if ok {
@@ -274,9 +284,17 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 	if current.CurrentRevision.Number != cmd.ExpectedRevision {
 		return MutationResult{}, ErrConflict
 	}
-	embedding, err := s.embed(ctx, strings.TrimSpace(cmd.Title+"\n"+cmd.Body))
-	if err != nil {
-		return MutationResult{}, err
+	currentEmbeddingInput := strings.TrimSpace(current.CurrentRevision.Title + "\n" + current.CurrentRevision.Body)
+	nextEmbeddingInput := strings.TrimSpace(cmd.Title + "\n" + cmd.Body)
+	var embedding []float32
+	reuseEmbeddingRevision := 0
+	if currentEmbeddingInput == nextEmbeddingInput {
+		reuseEmbeddingRevision = current.CurrentRevision.Number
+	} else {
+		embedding, err = s.embed(ctx, nextEmbeddingInput)
+		if err != nil {
+			return MutationResult{}, err
+		}
 	}
 	if duplicate, err := s.repo.FindExact(ctx, cmd.Principal.ID, current.SpaceID, hash, cmd.MemoryID); err != nil {
 		return MutationResult{}, err
@@ -297,7 +315,8 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 		Provenance: cmd.Provenance, ValidUntil: cmd.ValidUntil,
 		Reason: strings.TrimSpace(cmd.Reason), ContentHash: hash,
 		IdempotencyKey: cmd.IdempotencyKey, RequestHash: reqHash, Now: s.now(),
-		Embedding: embedding,
+		Embedding: embedding, ReuseEmbeddingRevision: reuseEmbeddingRevision,
+		PreserveContentUpdatedAt: substantiveUnchanged,
 	})
 	if err != nil {
 		if result, ok, retryErr := s.repo.FindIdempotent(ctx, cmd.Principal.ID, "revise", cmd.IdempotencyKey, reqHash); retryErr == nil && ok {
@@ -306,6 +325,19 @@ func (s *Service) Revise(ctx context.Context, cmd ReviseCommand) (MutationResult
 		return MutationResult{}, err
 	}
 	return MutationResult{Memory: mem, Written: true, UnfamiliarTopics: unfamiliar}, nil
+}
+
+func sameSubstantiveRevision(current Revision, next ReviseCommand) bool {
+	if current.Title != strings.TrimSpace(next.Title) || current.Body != strings.TrimSpace(next.Body) || current.Kind != next.Kind {
+		return false
+	}
+	if !slices.Equal(current.Topics, next.Topics) || !slices.Equal(current.Provenance, next.Provenance) {
+		return false
+	}
+	if current.ValidUntil == nil || next.ValidUntil == nil {
+		return current.ValidUntil == nil && next.ValidUntil == nil
+	}
+	return current.ValidUntil.Equal(*next.ValidUntil)
 }
 
 func (s *Service) Retract(ctx context.Context, cmd RetractCommand) (MutationResult, error) {
@@ -616,19 +648,7 @@ func (s *Service) topicAdvice(ctx context.Context, principal Principal, spaceID 
 }
 
 func (s *Service) Catalog(ctx context.Context, principal Principal, claims []WorkspaceClaim, cursor ...string) (CatalogResult, error) {
-	if len(claims) > 10 {
-		return CatalogResult{}, fmt.Errorf("%w: at most 10 workspace claims", ErrInvalidInput)
-	}
-	for _, claim := range claims {
-		if len(claim.Value) > 4096 {
-			return CatalogResult{}, fmt.Errorf("%w: workspace claim too long", ErrInvalidInput)
-		}
-	}
-	spaces, err := s.auth.ReadableSpaces(ctx, principal)
-	if err != nil {
-		return CatalogResult{}, err
-	}
-	entries, err := s.repo.Catalog(ctx, principal.ID, spaces, claims)
+	entries, err := s.catalogEntries(ctx, principal, claims)
 	if err != nil {
 		return CatalogResult{}, err
 	}
@@ -647,9 +667,21 @@ func (s *Service) Catalog(ctx context.Context, principal Principal, claims []Wor
 	const tokenBudget = 800
 	if len(entries) > 0 && !withinTokenBudget(CatalogResult{Spaces: entries[:1]}, tokenBudget) {
 		entries = append([]CatalogEntry(nil), entries...)
-		entries[0].Topics = nil
 		entries[0].Name = shorten(entries[0].Name, 128)
 		entries[0].Slug = shorten(entries[0].Slug, 64)
+		if !withinTokenBudget(CatalogResult{Spaces: entries[:1]}, tokenBudget) {
+			entries[0].Topics = nil
+		}
+		if !withinTokenBudget(CatalogResult{Spaces: entries[:1]}, tokenBudget) {
+			entries[0].UseWhen = ""
+		}
+		if !withinTokenBudget(CatalogResult{Spaces: entries[:1]}, tokenBudget) {
+			entries[0].Name = shorten(entries[0].Name, 48)
+			entries[0].Slug = shorten(entries[0].Slug, 24)
+		}
+		if !withinTokenBudget(CatalogResult{Spaces: entries[:1]}, tokenBudget) {
+			return CatalogResult{}, fmt.Errorf("%w: catalog cannot fit one Space inside the context budget", ErrInvalidInput)
+		}
 	}
 	keep := 0
 	for i := range entries {
@@ -663,10 +695,45 @@ func (s *Service) Catalog(ctx context.Context, principal Principal, claims []Wor
 		keep++
 	}
 	result := CatalogResult{Spaces: entries[:keep], OmittedCount: len(entries) - keep}
+	if len(entries) > 0 && keep == 0 {
+		return CatalogResult{}, fmt.Errorf("%w: catalog page did not advance", ErrInvalidInput)
+	}
 	if result.OmittedCount > 0 {
 		result.NextCursor = encodeCursor(cursorKind, offset+keep)
 	}
 	return result, nil
+}
+
+// StartupCatalog returns the authorized catalog before response-budget
+// pagination. Callers must pass it directly to the bounded startup renderer.
+// Keeping this path separate lets exact host-approved cues rise from later
+// catalog pages without increasing the emitted startup envelope.
+func (s *Service) StartupCatalog(ctx context.Context, principal Principal, claims []WorkspaceClaim) (CatalogResult, error) {
+	entries, err := s.catalogEntries(ctx, principal, claims)
+	if err != nil {
+		return CatalogResult{}, err
+	}
+	return CatalogResult{Spaces: entries}, nil
+}
+
+func (s *Service) catalogEntries(ctx context.Context, principal Principal, claims []WorkspaceClaim) ([]CatalogEntry, error) {
+	if len(claims) > 10 {
+		return nil, fmt.Errorf("%w: at most 10 workspace claims", ErrInvalidInput)
+	}
+	for _, claim := range claims {
+		if len(claim.Value) > 4096 {
+			return nil, fmt.Errorf("%w: workspace claim too long", ErrInvalidInput)
+		}
+	}
+	spaces, err := s.auth.ReadableSpaces(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := s.repo.Catalog(ctx, principal.ID, spaces, claims)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func (s *Service) Recall(ctx context.Context, query RecallQuery) ([]Hit, error) {
@@ -802,7 +869,6 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 	if !withinTokenBudget(buildResult(hits, repositoryMore), tokenBudget) {
 		for i := range hits {
 			hits[i].Topics = nil
-			hits[i].UseWhen = shorten(hits[i].UseWhen, 160)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 200)
 			hits[i].Title = shorten(hits[i].Title, 256)
 		}
@@ -810,7 +876,6 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 	if !withinTokenBudget(buildResult(hits, repositoryMore), tokenBudget) {
 		for i := range hits {
 			hits[i].Topics = nil
-			hits[i].UseWhen = shorten(hits[i].UseWhen, 64)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 64)
 			hits[i].Title = shorten(hits[i].Title, 64)
 		}
@@ -1054,7 +1119,7 @@ func filtersHash(filters MemoryFilters) string {
 	return string(raw)
 }
 
-func normalizeUseWhen(value string) (string, error) {
+func NormalizeUseWhen(value string) (string, error) {
 	if !utf8.ValidString(value) {
 		return "", fmt.Errorf("%w: use_when must be valid UTF-8", ErrInvalidInput)
 	}

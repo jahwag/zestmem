@@ -23,6 +23,127 @@ func (fixedEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return v, nil
 }
 
+func TestCueOnlyRevisionPreservesEmbeddingRecencyAndRejectsDisabledActor(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `TRUNCATE audit_events,idempotency_records,relations,memory_embeddings,memory_revisions,memories,workspace_bindings,space_grants,api_keys,spaces,principals CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	agent, owner, space := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := conn.Exec(ctx, `INSERT INTO principals(id,type,display_name) VALUES($1,'agent','backfill'),($2,'human','owner')`, agent, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO spaces(id,type,name,slug) VALUES($1,'project','Project','project')`, space); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO space_grants(principal_id,space_id,role,granted_by) VALUES($1,$2,'contributor',$3)`, agent, space, owner); err != nil {
+		t.Fatal(err)
+	}
+	store, err := postgres.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
+	created, err := svc.Remember(ctx, memory.RememberCommand{
+		Principal: memory.Principal{ID: agent}, SpaceID: space, Title: "Backfill target", Body: "Stable substantive body.",
+		Kind: memory.KindFact, Reason: "create cue-only fixture", IdempotencyKey: "cue-create",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	current := created.Memory.CurrentRevision
+	updated, err := svc.Revise(ctx, memory.ReviseCommand{
+		Principal: memory.Principal{ID: agent}, MemoryID: created.Memory.ID, ExpectedRevision: 1,
+		Title: current.Title, Body: current.Body, UseWhen: "Investigating cue-only revision behavior.", UseWhenSet: true,
+		Kind: current.Kind, Topics: current.Topics, Provenance: current.Provenance,
+		Reason: "reviewed cue backfill", IdempotencyKey: "cue-revise",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Memory.CurrentRevision.Number != 2 {
+		t.Fatalf("revision=%d", updated.Memory.CurrentRevision.Number)
+	}
+	var contentUpdatedAt, sourceCreatedAt, cueCreatedAt time.Time
+	var revisionCount, embeddingCount, auditCount int
+	var embeddingAndFingerprintEqual bool
+	err = conn.QueryRow(ctx, `SELECT m.content_updated_at,r1.created_at,r2.created_at,
+ (SELECT count(*) FROM memory_revisions WHERE memory_id=m.id),
+ (SELECT count(*) FROM memory_embeddings WHERE memory_id=m.id),
+ (SELECT count(*) FROM audit_events WHERE actor_id=$2 AND action='revise' AND target_id=m.id::text),
+ (SELECT (e1.embedding::text,e1.provider,e1.model,e1.model_revision,e1.dimensions,e1.normalization,e1.query_prefix,e1.document_prefix,e1.created_at)
+         IS NOT DISTINCT FROM
+         (e2.embedding::text,e2.provider,e2.model,e2.model_revision,e2.dimensions,e2.normalization,e2.query_prefix,e2.document_prefix,e2.created_at)
+    FROM memory_embeddings e1 JOIN memory_embeddings e2 ON e2.memory_id=e1.memory_id
+   WHERE e1.memory_id=m.id AND e1.revision=1 AND e2.revision=2)
+ FROM memories m
+ JOIN memory_revisions r1 ON r1.memory_id=m.id AND r1.revision=1
+ JOIN memory_revisions r2 ON r2.memory_id=m.id AND r2.revision=2
+ WHERE m.id=$1`, created.Memory.ID, agent).Scan(&contentUpdatedAt, &sourceCreatedAt, &cueCreatedAt, &revisionCount, &embeddingCount, &auditCount, &embeddingAndFingerprintEqual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contentUpdatedAt.Equal(sourceCreatedAt) || !cueCreatedAt.After(sourceCreatedAt) || revisionCount != 2 || embeddingCount != 2 || auditCount != 1 || !embeddingAndFingerprintEqual {
+		t.Fatalf("content=%s source=%s cue=%s revisions=%d embeddings=%d audits=%d exact_copy=%v", contentUpdatedAt, sourceCreatedAt, cueCreatedAt, revisionCount, embeddingCount, auditCount, embeddingAndFingerprintEqual)
+	}
+	afterSubstantive := sourceCreatedAt.Add(time.Microsecond)
+	browsed, err := svc.BrowsePage(ctx, memory.BrowseQuery{Principal: memory.Principal{ID: agent}, SpaceIDs: []string{space}, MemoryFilters: memory.MemoryFilters{RevisedFrom: &afterSubstantive}})
+	if err != nil || browsed.TotalCount != 1 {
+		t.Fatalf("browse after cue-only revision=%#v error=%v", browsed, err)
+	}
+	recalled, err := svc.RecallPage(ctx, memory.RecallQuery{Principal: memory.Principal{ID: agent}, SpaceIDs: []string{space}, Query: "stable substantive body", MemoryFilters: memory.MemoryFilters{RevisedFrom: &afterSubstantive}})
+	if err != nil || recalled.TotalCount != 1 {
+		t.Fatalf("recall after cue-only revision=%#v error=%v", recalled, err)
+	}
+	withoutVector := memory.NewService(store, store)
+	missing, err := withoutVector.Remember(ctx, memory.RememberCommand{
+		Principal: memory.Principal{ID: agent}, SpaceID: space, Title: "Missing vector", Body: "A legacy-style record without an embedding.",
+		Kind: memory.KindFact, Reason: "create missing-vector fixture", IdempotencyKey: "missing-vector-create",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingCurrent := missing.Memory.CurrentRevision
+	_, err = withoutVector.Revise(ctx, memory.ReviseCommand{
+		Principal: memory.Principal{ID: agent}, MemoryID: missing.Memory.ID, ExpectedRevision: 1,
+		Title: missingCurrent.Title, Body: missingCurrent.Body, UseWhen: "Investigating missing-vector behavior.", UseWhenSet: true,
+		Kind: missingCurrent.Kind, Topics: missingCurrent.Topics, Provenance: missingCurrent.Provenance,
+		Reason: "must roll back", IdempotencyKey: "missing-vector-revise",
+	})
+	if err == nil || !strings.Contains(err.Error(), "embedding is missing") {
+		t.Fatalf("missing-vector revision error=%v", err)
+	}
+	var missingRevision, missingRevisionCount int
+	if err := conn.QueryRow(ctx, `SELECT m.current_revision,(SELECT count(*) FROM memory_revisions r WHERE r.memory_id=m.id) FROM memories m WHERE m.id=$1`, missing.Memory.ID).Scan(&missingRevision, &missingRevisionCount); err != nil || missingRevision != 1 || missingRevisionCount != 1 {
+		t.Fatalf("missing-vector rollback current=%d revisions=%d error=%v", missingRevision, missingRevisionCount, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE principals SET disabled_at=now() WHERE id=$1`, agent); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Revise(ctx, memory.ReviseCommand{
+		Principal: memory.Principal{ID: agent}, MemoryID: created.Memory.ID, ExpectedRevision: 2,
+		Title: current.Title, Body: current.Body, UseWhen: "Another cue.", UseWhenSet: true,
+		Kind: current.Kind, Topics: current.Topics, Provenance: current.Provenance,
+		Reason: "must be denied", IdempotencyKey: "disabled-revise",
+	})
+	if !errors.Is(err, memory.ErrForbidden) {
+		t.Fatalf("disabled actor error=%v", err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM memory_revisions WHERE memory_id=$1`, created.Memory.ID).Scan(&revisionCount); err != nil || revisionCount != 2 {
+		t.Fatalf("revision count after disabled write=%d error=%v", revisionCount, err)
+	}
+}
+
 func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -68,7 +189,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 6 {
+	if err != nil || migrationCount != 9 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
@@ -299,14 +420,14 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revised, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", UseWhenSet: true, Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if revised.Memory.CurrentRevision.Number != 2 || revised.Memory.CurrentRevision.UseWhen != "Changing or troubleshooting database pool limits." {
 		t.Fatal("revision did not advance")
 	}
-	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
+	revisedRetry, err := svc.Revise(ctx, memory.ReviseCommand{Principal: cmd.Principal, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Connection pool", Body: "Use at most sixteen database connections.", UseWhen: "Changing or troubleshooting database pool limits.", UseWhenSet: true, Kind: memory.KindDirective, Topics: []string{"postgres"}, Provenance: cmd.Provenance, Reason: "capacity correction", IdempotencyKey: "revise-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,47 @@ func TestCatalogAndRecallStayInsideContextEnvelopes(t *testing.T) {
 	}
 }
 
+func TestStartupCatalogRetainsEntriesBeyondBoundedCatalogPage(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.catalog = make([]CatalogEntry, 100)
+	for i := range repo.catalog {
+		repo.catalog[i] = CatalogEntry{SpaceID: fmt.Sprintf("space-%03d", i), Name: strings.Repeat("name", 20), Slug: fmt.Sprintf("space-%03d", i), Type: "project"}
+	}
+	page, err := svc.Catalog(context.Background(), Principal{ID: "agent"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startupCatalog, err := svc.StartupCatalog(context.Background(), Principal{ID: "agent"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Spaces) >= len(repo.catalog) || len(startupCatalog.Spaces) != len(repo.catalog) {
+		t.Fatalf("page=%d startup=%d total=%d", len(page.Spaces), len(startupCatalog.Spaces), len(repo.catalog))
+	}
+}
+
+func TestCatalogMaximumEscapedSpaceCueStillAdvances(t *testing.T) {
+	svc, repo, _ := testService()
+	repo.catalog = []CatalogEntry{
+		{SpaceID: strings.Repeat("i", 36), Name: strings.Repeat("n", 100), Slug: strings.Repeat("s", 80), Type: "project", UseWhen: strings.Repeat("<&>", 80), Topics: []string{strings.Repeat("t", 80)}},
+		{SpaceID: strings.Repeat("j", 36), Name: "next", Slug: "next", Type: "project"},
+	}
+	page, err := svc.Catalog(context.Background(), Principal{ID: "agent"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(page)
+	if len(page.Spaces) == 0 || conservativeTokenCount(raw) > 800 {
+		t.Fatalf("page=%#v bytes=%d", page, len(raw))
+	}
+	if page.NextCursor != "" {
+		next, err := svc.Catalog(context.Background(), Principal{ID: "agent"}, nil, page.NextCursor)
+		if err != nil || len(next.Spaces) == 0 {
+			t.Fatalf("next=%#v error=%v", next, err)
+		}
+	}
+}
+
 func TestRecallCursorPagesStableRankedHits(t *testing.T) {
 	svc, repo, _ := testService()
 	repo.hits = make([]Hit, 7)
@@ -78,10 +119,11 @@ func TestRecallCursorPagesStableRankedHits(t *testing.T) {
 
 func TestRecallCompactsAggregateBeforeDroppingRankedHits(t *testing.T) {
 	svc, repo, _ := testService()
+	useWhen := strings.Repeat("u", 200) + " without using stale guidance."
 	for i := 0; i < 4; i++ {
 		repo.hits = append(repo.hits, Hit{
 			MemoryID: fmt.Sprintf("m-%d", i), SpaceID: "project",
-			Title: strings.Repeat("t", 37), UseWhen: strings.Repeat("u", 160),
+			Title: strings.Repeat("t", 37), UseWhen: useWhen,
 			Excerpt: strings.Repeat("e", 400), Kind: KindFact, Revision: 1, Score: 1,
 		})
 	}
@@ -95,6 +137,9 @@ func TestRecallCompactsAggregateBeforeDroppingRankedHits(t *testing.T) {
 	for i, hit := range first.Hits {
 		if hit.MemoryID != fmt.Sprintf("m-%d", i) {
 			t.Fatalf("rank %d=%q", i, hit.MemoryID)
+		}
+		if hit.UseWhen != useWhen {
+			t.Fatalf("rank %d cue was semantically truncated: %q", i, hit.UseWhen)
 		}
 	}
 	raw, _ := json.Marshal(first)
@@ -526,6 +571,7 @@ func TestReviseUsesOptimisticConcurrency(t *testing.T) {
 	_, err = svc.Revise(context.Background(), ReviseCommand{
 		Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID,
 		ExpectedRevision: 2, Title: "Updated", Body: "Updated body",
+		UseWhen: created.Memory.CurrentRevision.UseWhen, UseWhenSet: true,
 		Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-1",
 	})
 	if !errors.Is(err, ErrConflict) {
@@ -542,7 +588,7 @@ func TestReviseCreatesImmutableNextRevision(t *testing.T) {
 	result, err := svc.Revise(context.Background(), ReviseCommand{
 		Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID,
 		ExpectedRevision: 1, Title: "Updated", Body: "Updated body",
-		UseWhen: "Reviewing updated behavior.", Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-1",
+		UseWhen: "Reviewing updated behavior.", UseWhenSet: true, Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +604,7 @@ func TestReviseRetryReturnsOriginalResultAfterRevisionAdvanced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := ReviseCommand{Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Updated", Body: "Updated body", Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-retry"}
+	cmd := ReviseCommand{Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID, ExpectedRevision: 1, Title: "Updated", Body: "Updated body", UseWhen: created.Memory.CurrentRevision.UseWhen, UseWhenSet: true, Kind: KindFact, Reason: "Correct wording", IdempotencyKey: "rev-retry"}
 	first, err := svc.Revise(context.Background(), cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -572,6 +618,56 @@ func TestReviseRetryReturnsOriginalResultAfterRevisionAdvanced(t *testing.T) {
 	}
 	if !first.Written || first.Replayed || second.Written || !second.Replayed {
 		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+}
+
+type rejectingEmbedder struct{ calls int }
+
+func (e *rejectingEmbedder) Embed(context.Context, string) ([]float32, error) {
+	e.calls++
+	return nil, errors.New("embedder must not be called")
+}
+
+func TestCueOnlyRevisionReusesEmbeddingAndPreservesSubstantiveRecency(t *testing.T) {
+	svc, repo, _ := testService()
+	created, err := svc.Remember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejecting := &rejectingEmbedder{}
+	svc.WithEmbedder(rejecting)
+	current := created.Memory.CurrentRevision
+	result, err := svc.Revise(context.Background(), ReviseCommand{
+		Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID, ExpectedRevision: 1,
+		Title: current.Title, Body: current.Body, UseWhen: "Debugging the relevant fact.", UseWhenSet: true,
+		Kind: current.Kind, Topics: current.Topics, Provenance: current.Provenance,
+		Reason: "Add reviewed retrieval cue", IdempotencyKey: "cue-only-revision",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejecting.calls != 0 {
+		t.Fatalf("embedder calls=%d", rejecting.calls)
+	}
+	if result.Memory.CurrentRevision.Number != 2 || repo.lastRevise.ReuseEmbeddingRevision != 1 || !repo.lastRevise.PreserveContentUpdatedAt || len(repo.lastRevise.Embedding) != 0 {
+		t.Fatalf("result=%#v revise=%#v", result, repo.lastRevise)
+	}
+}
+
+func TestSubstantiveRevisionRequiresExplicitCueDecision(t *testing.T) {
+	svc, _, _ := testService()
+	created, err := svc.Remember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := created.Memory.CurrentRevision
+	_, err = svc.Revise(context.Background(), ReviseCommand{
+		Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID, ExpectedRevision: 1,
+		Title: current.Title, Body: "Changed body", Kind: current.Kind, Topics: current.Topics, Provenance: current.Provenance,
+		Reason: "Substantive correction", IdempotencyKey: "missing-cue-decision",
+	})
+	if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), "explicitly preserved") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -693,6 +789,7 @@ type fakeRepo struct {
 	metadata      RepositoryMetadataResult
 	topicUsage    map[string]int
 	auth          Authorizer
+	lastRevise    ReviseRecord
 }
 
 func (r *fakeRepo) idemKey(principal, op, key string) string { return principal + "/" + op + "/" + key }
@@ -748,6 +845,7 @@ func (r *fakeRepo) ReadAuthorized(ctx context.Context, id string, principal Prin
 }
 
 func (r *fakeRepo) Revise(_ context.Context, rec ReviseRecord) (Memory, error) {
+	r.lastRevise = rec
 	mem := r.memories[rec.MemoryID]
 	if mem.CurrentRevision.Number != rec.ExpectedRevision {
 		return Memory{}, ErrConflict

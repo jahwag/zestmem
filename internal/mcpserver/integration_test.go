@@ -15,12 +15,21 @@ import (
 	"github.com/bytelope/zestmem/internal/mcpserver"
 	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/bytelope/zestmem/internal/postgres"
+	"github.com/bytelope/zestmem/internal/startup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type bearerTransport struct{ token string }
+
+type fixedEmbedder struct{}
+
+func (fixedEmbedder) Embed(context.Context, string) ([]float32, error) {
+	vector := make([]float32, 384)
+	vector[0] = 1
+	return vector, nil
+}
 
 func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
@@ -42,15 +51,27 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, agent, space := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	owner, agent, space, workspaceProject := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	spaceCue := "Working on MCP integration behavior."
 	secret := "am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	digest := sha256.Sum256([]byte(secret))
 	_, err = conn.Exec(ctx, `INSERT INTO principals(id,type,display_name) VALUES($1,'human','owner'),($2,'agent','agent')`, owner, agent)
 	if err == nil {
-		_, err = conn.Exec(ctx, `INSERT INTO spaces(id,type,name,slug) VALUES($1,'organization','Org','org')`, space)
+		_, err = conn.Exec(ctx, `INSERT INTO spaces(id,type,name,slug,use_when) VALUES($1,'organization','Org','org',$2)`, space, spaceCue)
 	}
 	if err == nil {
 		_, err = conn.Exec(ctx, `INSERT INTO space_grants(principal_id,space_id,role,granted_by) VALUES($1,$2,'contributor',$3)`, agent, space, owner)
+	}
+	if err == nil {
+		_, err = conn.Exec(ctx, `INSERT INTO spaces(id,type,parent_id,name,slug) VALUES($1,'project',$2,'Mapped project','mapped-project')`, workspaceProject, space)
+	}
+	if err == nil {
+		_, err = conn.Exec(ctx, `INSERT INTO spaces(type,parent_id,name,slug)
+	SELECT 'project',$1,repeat('Catalog child ',6)||n::text,'catalog-child-'||n::text FROM generate_series(1,19) n`, space)
+	}
+	if err == nil {
+		_, err = conn.Exec(ctx, `INSERT INTO workspace_bindings(project_space_id,claim_kind,normalized_value,created_by)
+	 VALUES($1,'git_remote','https://example.invalid/team/project',$2)`, workspaceProject, owner)
 	}
 	if err == nil {
 		_, err = conn.Exec(ctx, `INSERT INTO api_keys(principal_id,prefix,digest,created_by) VALUES($1,'integr-test',$2,$3)`, agent, digest[:], owner)
@@ -67,8 +88,8 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if _, err := store.ByAPIKeyDigest(ctx, digest[:]); err != nil {
 		t.Fatalf("fallback-key lookup: %v", err)
 	}
-	domain := memory.NewService(store, store)
-	server := httptest.NewServer(authn.NewAPIKeyOnly(store).Middleware(mcpserver.New(domain).Handler()))
+	domain := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
+	server := httptest.NewServer(authn.NewAPIKeyOnly(store).Middleware(mcpserver.New(domain).WithStartupApprovals(startup.Approvals{space: startup.CueHash(spaceCue)}).Handler()))
 	defer server.Close()
 	client := mcp.NewClient(&mcp.Implementation{Name: "integration-client", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL, HTTPClient: &http.Client{Transport: bearerTransport{token: secret}}, DisableStandaloneSSE: true}, nil)
@@ -79,11 +100,11 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 9 {
+	if len(listed.Tools) != 10 {
 		t.Fatalf("tool count=%d", len(listed.Tools))
 	}
 	var rememberRequired []string
-	var reviseSchema string
+	var reviseSchema, startupSchema string
 	for _, tool := range listed.Tools {
 		if tool.Name == "revise_memory" {
 			raw, err := json.Marshal(tool.InputSchema)
@@ -91,6 +112,13 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			reviseSchema = string(raw)
+		}
+		if tool.Name == "startup_context" {
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			startupSchema = string(raw)
 		}
 		if tool.Name != "remember" {
 			continue
@@ -110,17 +138,40 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if !slices.Contains(rememberRequired, "target_space_id") {
 		t.Fatalf("remember required fields=%v", rememberRequired)
 	}
-	for _, phrase := range []string{"Omit to preserve the current value", "empty string to clear it", "240 UTF-8 bytes", "untrusted"} {
+	if strings.Contains(startupSchema, `"cursor"`) || !strings.Contains(startupSchema, `"preferred_space_id"`) {
+		t.Fatalf("startup context exposed wrong pagination schema: %s", startupSchema)
+	}
+	for _, phrase := range []string{"explicitly pass its current value to preserve it", "empty string to clear it", "240 UTF-8 bytes", "untrusted"} {
 		if !strings.Contains(reviseSchema, phrase) {
 			t.Fatalf("revise use_when schema omitted %q: %s", phrase, reviseSchema)
 		}
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "catalog", Arguments: map[string]any{}})
+	workspaceClaims := []map[string]any{{"kind": "git_remote", "value": "https://example.invalid/team/project"}}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "catalog", Arguments: map[string]any{"workspace_claims": workspaceClaims}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.IsError || len(result.Content) == 0 {
 		t.Fatalf("catalog result=%#v", result)
+	}
+	var firstCatalog memory.CatalogResult
+	if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &firstCatalog); err != nil || firstCatalog.NextCursor == "" || len(firstCatalog.Spaces) == 0 {
+		t.Fatalf("first catalog page=%#v error=%v", firstCatalog, err)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "catalog", Arguments: map[string]any{"cursor": firstCatalog.NextCursor, "workspace_claims": workspaceClaims}})
+	if err != nil || result.IsError {
+		t.Fatalf("second catalog result=%#v error=%v", result, err)
+	}
+	var secondCatalog memory.CatalogResult
+	if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &secondCatalog); err != nil || len(secondCatalog.Spaces) == 0 || secondCatalog.Spaces[0].SpaceID == firstCatalog.Spaces[0].SpaceID {
+		t.Fatalf("second catalog page=%#v error=%v", secondCatalog, err)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "startup_context", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("startup context result=%#v error=%v", result, err)
+	}
+	if text := result.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, spaceCue) || !strings.Contains(text, "untrusted routing metadata") || len(text) > startup.MaxContextBytes {
+		t.Fatalf("startup context=%q", text)
 	}
 	for _, call := range []*mcp.CallToolParams{
 		{Name: "suggest_topics", Arguments: map[string]any{"query": "sec"}},
