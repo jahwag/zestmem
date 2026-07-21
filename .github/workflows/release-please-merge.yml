@@ -1,0 +1,50 @@
+name: Weekly Release Merge
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: weekly-release-merge
+  cancel-in-progress: false
+jobs:
+  merge-release-pr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Find open release-please PR
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --label "autorelease: pending" --json number --jq '.[0].number // empty')
+          if [ -z "$pr_number" ]; then
+            echo "No open release-please PR found; nothing to do."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checks, then squash-merge
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.find.outputs.number }}
+        run: |
+          gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --watch --interval 30 --fail-fast
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash
+
+      - name: Dispatch release-please
+        # Merging with GITHUB_TOKEN pushes to main but does not trigger other
+        # workflows (GitHub suppresses cascades from the default token to
+        # prevent loops), so release-please.yml's push trigger would never
+        # fire on its own. Dispatch it explicitly so the tag/GitHub Release
+        # for the just-merged version is published without delay.
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-please.yml --repo "$GITHUB_REPOSITORY" --ref main
