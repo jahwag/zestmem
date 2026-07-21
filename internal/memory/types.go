@@ -272,6 +272,7 @@ type ReadSegmentResult struct {
 	Status                        Status                         `json:"status"`
 	Revision                      int                            `json:"revision"`
 	Title                         string                         `json:"title"`
+	UseWhen                       string                         `json:"use_when,omitempty"`
 	Kind                          Kind                           `json:"kind"`
 	ActorID                       string                         `json:"actor_id"`
 	ActorDisplayName              string                         `json:"actor_display_name,omitempty"`

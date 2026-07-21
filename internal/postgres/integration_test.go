@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/bytelope/zestmem/internal/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type fixedEmbedder struct{}
@@ -66,7 +68,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 5 {
+	if err != nil || migrationCount != 6 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
@@ -135,11 +137,24 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, constraintErr := constraintConn.Exec(ctx, `UPDATE memory_revisions SET use_when=repeat('x',241) WHERE memory_id=$1`, created.Memory.ID)
-	constraintConn.Close(ctx)
-	if constraintErr == nil {
-		t.Fatal("database accepted use_when longer than 240 bytes")
+	unsafeUseWhen := map[string]string{
+		"too long":       strings.Repeat("x", 241),
+		"control":        "unsafe\u001fvalue",
+		"soft hyphen":    "unsafe\u00advalue",
+		"zero width":     "unsafe\u200bvalue",
+		"line separator": "unsafe\u2028value",
+		"bidi override":  "unsafe\u202evalue",
+		"noncharacter":   "unsafe\ufdd0value",
 	}
+	for name, value := range unsafeUseWhen {
+		_, constraintErr := constraintConn.Exec(ctx, `UPDATE memory_revisions SET use_when=$2 WHERE memory_id=$1`, created.Memory.ID, value)
+		var pgErr *pgconn.PgError
+		if !errors.As(constraintErr, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "memory_revisions_use_when_check" {
+			constraintConn.Close(ctx)
+			t.Fatalf("database accepted unsafe use_when %s: %v", name, constraintErr)
+		}
+	}
+	constraintConn.Close(ctx)
 	plainService := memory.NewService(store, store)
 	if cueOnlyHits, err := plainService.Recall(ctx, memory.RecallQuery{Principal: cmd.Principal, Query: "debugging"}); err != nil {
 		t.Fatal(err)

@@ -83,7 +83,15 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 		t.Fatalf("tool count=%d", len(listed.Tools))
 	}
 	var rememberRequired []string
+	var reviseSchema string
 	for _, tool := range listed.Tools {
+		if tool.Name == "revise_memory" {
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviseSchema = string(raw)
+		}
 		if tool.Name != "remember" {
 			continue
 		}
@@ -101,6 +109,11 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if !slices.Contains(rememberRequired, "target_space_id") {
 		t.Fatalf("remember required fields=%v", rememberRequired)
+	}
+	for _, phrase := range []string{"Omit to preserve the current value", "empty string to clear it", "240 UTF-8 bytes", "untrusted"} {
+		if !strings.Contains(reviseSchema, phrase) {
+			t.Fatalf("revise use_when schema omitted %q: %s", phrase, reviseSchema)
+		}
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "catalog", Arguments: map[string]any{}})
 	if err != nil {
@@ -161,11 +174,11 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("bounded read result=%#v err=%v", result, err)
 	}
-	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) || !strings.Contains(text, `"next_start_line":81`) || strings.Contains(text, `"content_hash"`) {
+	if text := result.Content[0].(*mcp.TextContent).Text; strings.Contains(text, bodyMarker) || !strings.Contains(text, `"next_start_line":81`) || !strings.Contains(text, `"use_when":"Testing MCP mutation result context boundaries."`) || strings.Contains(text, `"content_hash"`) {
 		t.Fatalf("segment read was not bounded: %s", text)
 	}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "read_memory_segment", Arguments: map[string]any{"memory_id": created.Memory.ID, "pattern": "SECRET-BODY"}})
-	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, bodyMarker) {
+	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, bodyMarker) || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, `"use_when":"Testing MCP mutation result context boundaries."`) {
 		t.Fatalf("grep read result=%#v err=%v", result, err)
 	}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "remember", Arguments: rememberArgs})

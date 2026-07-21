@@ -76,6 +76,37 @@ func TestRecallCursorPagesStableRankedHits(t *testing.T) {
 	}
 }
 
+func TestRecallCompactsAggregateBeforeDroppingRankedHits(t *testing.T) {
+	svc, repo, _ := testService()
+	for i := 0; i < 4; i++ {
+		repo.hits = append(repo.hits, Hit{
+			MemoryID: fmt.Sprintf("m-%d", i), SpaceID: "project",
+			Title: strings.Repeat("t", 37), UseWhen: strings.Repeat("u", 160),
+			Excerpt: strings.Repeat("e", 400), Kind: KindFact, Revision: 1, Score: 1,
+		})
+	}
+	first, err := svc.RecallPage(context.Background(), RecallQuery{Principal: Principal{ID: "agent"}, Query: "task", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Hits) != 3 || first.NextCursor == "" {
+		t.Fatalf("first=%#v", first)
+	}
+	for i, hit := range first.Hits {
+		if hit.MemoryID != fmt.Sprintf("m-%d", i) {
+			t.Fatalf("rank %d=%q", i, hit.MemoryID)
+		}
+	}
+	raw, _ := json.Marshal(first)
+	if tokens := conservativeTokenCount(raw); tokens > 2000 {
+		t.Fatalf("tokens=%d", tokens)
+	}
+	second, err := svc.RecallPage(context.Background(), RecallQuery{Principal: Principal{ID: "agent"}, Query: "task", Limit: 3, Cursor: first.NextCursor})
+	if err != nil || len(second.Hits) != 1 || second.Hits[0].MemoryID != "m-3" {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+}
+
 func TestBrowseCursorPagesAndFiltersAreAuthorizationBound(t *testing.T) {
 	svc, repo, auth := testService()
 	auth.spaces = []string{"project", "other-readable"}
@@ -232,11 +263,11 @@ func TestReadSegmentPagesAndGrepsWithoutReturningFullBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	window, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, StartLine: 2, LineCount: 2})
-	if err != nil || window.Content != "needle two\nthree" || window.Window.NextStartLine != 4 || len(window.Provenance) != 1 || !window.Provenance[0].LocatorTruncated || window.Provenance[0].Attribution != "Avery" || window.ValidUntil == nil || window.Reason == "" {
+	if err != nil || window.Content != "needle two\nthree" || window.UseWhen != cmd.UseWhen || window.Window.NextStartLine != 4 || len(window.Provenance) != 1 || !window.Provenance[0].LocatorTruncated || window.Provenance[0].Attribution != "Avery" || window.ValidUntil == nil || window.Reason == "" {
 		t.Fatalf("window=%#v err=%v", window, err)
 	}
 	matches, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: cmd.Principal, MemoryID: created.Memory.ID, Pattern: "needle", ContextLines: 1})
-	if err != nil || len(matches.Matches) != 1 || matches.Matches[0].StartLine != 1 || matches.Matches[0].EndLine != 6 {
+	if err != nil || matches.UseWhen != cmd.UseWhen || len(matches.Matches) != 1 || matches.Matches[0].StartLine != 1 || matches.Matches[0].EndLine != 6 {
 		t.Fatalf("matches=%#v err=%v", matches, err)
 	}
 	if repo.memories[created.Memory.ID].CurrentRevision.Body == "" {

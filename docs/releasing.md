@@ -25,6 +25,14 @@ cannot run; record why. Roll back deployments to a previously verified immutable
 image digest or native version. Releases and tags remain as audit evidence and
 must not be deleted or rewritten.
 
+Before a schema-bearing deployment, stop or drain all writers and retain a
+verified database backup paired with the previous binary. Older ZestMem
+binaries intentionally reject databases containing newer migration versions,
+so a binary-only rollback is not supported after a migration is applied.
+Restore the paired pre-deployment database for a production rollback. Numbered
+`.down.sql` files are development aids and must never be used to discard live
+data without an explicit export and operator review.
+
 The SLSA reusable workflow is pinned to its required full version tag rather
 than a commit SHA because GitHub's reusable-workflow verifier binds provenance
 to that public tag. This is the sole action pinning exception.
