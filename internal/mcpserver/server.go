@@ -119,7 +119,7 @@ type rememberInput struct {
 type reviseFields struct {
 	Title       *string              `json:"title,omitempty"`
 	Body        *string              `json:"body,omitempty"`
-	UseWhen     *string              `json:"use_when,omitempty"`
+	UseWhen     *string              `json:"use_when,omitempty" jsonschema:"Optional replacement for use_when. Omit to preserve the current value; pass an empty string to clear it. Must be body-supported, one line, untrusted, and at most 240 UTF-8 bytes; never instructions."`
 	Kind        *memory.Kind         `json:"kind,omitempty"`
 	Topics      *[]string            `json:"topics,omitempty"`
 	Provenance  *[]memory.Provenance `json:"provenance,omitempty"`

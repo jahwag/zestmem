@@ -364,7 +364,8 @@ func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegment
 	result := ReadSegmentResult{
 		MemoryID: memoryValue.ID, SpaceID: memoryValue.SpaceID, Status: memoryValue.Status,
 		Revision: memoryValue.CurrentRevision.Number, Title: memoryValue.CurrentRevision.Title,
-		Kind: memoryValue.CurrentRevision.Kind, ActorID: memoryValue.CurrentRevision.ActorID,
+		UseWhen: memoryValue.CurrentRevision.UseWhen, Kind: memoryValue.CurrentRevision.Kind,
+		ActorID:           memoryValue.CurrentRevision.ActorID,
 		ActorDisplayName:  memoryValue.CurrentRevision.ActorDisplayName,
 		RevisionCreatedAt: memoryValue.CurrentRevision.CreatedAt, ValidUntil: memoryValue.CurrentRevision.ValidUntil,
 		Reason: memoryValue.CurrentRevision.Reason,
@@ -786,39 +787,49 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 		return RecallResult{}, err
 	}
 	hits := page.Hits
-	more := len(hits) > requested
-	if more {
+	repositoryMore := len(hits) > requested
+	if repositoryMore {
 		hits = hits[:requested]
 	}
 	const tokenBudget = 2000
-	for i := range hits {
-		if !withinTokenBudget(RecallResult{Hits: hits[i : i+1]}, tokenBudget) {
+	buildResult := func(candidate []Hit, more bool) RecallResult {
+		result := RecallResult{Hits: candidate, TotalCount: page.TotalCount}
+		if more {
+			result.NextCursor = encodeCursor(cursorKind, query.Offset+len(candidate))
+		}
+		return result
+	}
+	if !withinTokenBudget(buildResult(hits, repositoryMore), tokenBudget) {
+		for i := range hits {
 			hits[i].Topics = nil
 			hits[i].UseWhen = shorten(hits[i].UseWhen, 160)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 200)
 			hits[i].Title = shorten(hits[i].Title, 256)
 		}
-		if !withinTokenBudget(RecallResult{Hits: hits[i : i+1]}, tokenBudget) {
+	}
+	if !withinTokenBudget(buildResult(hits, repositoryMore), tokenBudget) {
+		for i := range hits {
+			hits[i].Topics = nil
 			hits[i].UseWhen = shorten(hits[i].UseWhen, 64)
 			hits[i].Excerpt = shorten(hits[i].Excerpt, 64)
 			hits[i].Title = shorten(hits[i].Title, 64)
 		}
 	}
-	keep := 0
-	for i := range hits {
-		if !withinTokenBudget(RecallResult{Hits: hits[:i+1]}, tokenBudget) {
+	keep := len(hits)
+	for keep > 0 {
+		more := repositoryMore || keep < len(hits)
+		if withinTokenBudget(buildResult(hits[:keep], more), tokenBudget) {
 			break
 		}
-		keep++
+		keep--
 	}
-	if keep < len(hits) {
-		more = true
+	if keep == 0 && len(hits) > 0 {
+		// Valid persisted fields always fit after stage-two compaction. Preserve
+		// forward cursor progress if a repository implementation violates those
+		// field bounds rather than returning a zero-advance page.
+		keep = 1
 	}
-	result := RecallResult{Hits: hits[:keep], TotalCount: page.TotalCount}
-	if more {
-		result.NextCursor = encodeCursor(cursorKind, query.Offset+keep)
-	}
-	return result, nil
+	return buildResult(hits[:keep], repositoryMore || keep < len(hits)), nil
 }
 
 func encodeCursor(kind string, offset int) string {
