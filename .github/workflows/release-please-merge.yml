@@ -6,6 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 concurrency:
   group: weekly-release-merge
   cancel-in-progress: false
@@ -36,3 +37,14 @@ jobs:
         run: |
           gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --watch --interval 30 --fail-fast
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash
+
+      - name: Dispatch release-please
+        # Merging with GITHUB_TOKEN pushes to main but does not trigger other
+        # workflows (GitHub suppresses cascades from the default token to
+        # prevent loops), so release-please.yml's push trigger would never
+        # fire on its own. Dispatch it explicitly so the tag/GitHub Release
+        # for the just-merged version is published without delay.
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-please.yml --repo "$GITHUB_REPOSITORY" --ref main
