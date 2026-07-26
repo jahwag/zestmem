@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 type EmbeddingObserver interface{ ObserveEmbedding(time.Duration, error) }

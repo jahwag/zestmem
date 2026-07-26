@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/jahwag/zestmem/internal/startup"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

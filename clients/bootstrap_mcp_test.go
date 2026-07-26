@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/jahwag/zestmem/internal/startup"
 )
 
 func TestBootstrapMCP(t *testing.T) {

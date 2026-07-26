@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/migrations"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/internal/postgres"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

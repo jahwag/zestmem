@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 )

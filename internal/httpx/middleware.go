@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/authn"
 	"github.com/google/uuid"
 )
 

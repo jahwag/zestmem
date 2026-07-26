@@ -1,4 +1,4 @@
-module github.com/bytelope/zestmem
+module github.com/jahwag/zestmem
 
 go 1.25.0
 

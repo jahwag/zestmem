@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bytelope/zestmem/internal/mcpserver"
+	"github.com/jahwag/zestmem/internal/mcpserver"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

@@ -15,8 +15,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/bytelope/zestmem/internal/buildinfo"
-	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/jahwag/zestmem/internal/buildinfo"
+	"github.com/jahwag/zestmem/internal/startup"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
 )

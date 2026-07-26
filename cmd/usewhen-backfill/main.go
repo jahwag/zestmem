@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/buildinfo"
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/buildinfo"
+	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

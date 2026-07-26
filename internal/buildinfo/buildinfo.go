@@ -3,7 +3,7 @@ package buildinfo
 
 import "fmt"
 
-const Source = "https://github.com/bytelope/zestmem"
+const Source = "https://github.com/jahwag/zestmem"
 
 var (
 	Version  = "dev"

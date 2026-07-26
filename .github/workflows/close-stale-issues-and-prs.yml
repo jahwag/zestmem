@@ -1,0 +1,41 @@
+name: Close stale issues and pull requests
+
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: stale
+  cancel-in-progress: true
+
+jobs:
+  stale:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v10.1.0
+        with:
+          days-before-issue-stale: 21
+          days-before-issue-close: 7
+          days-before-pr-stale: 21
+          days-before-pr-close: 7
+          stale-issue-label: stale
+          stale-pr-label: stale
+          stale-issue-message: >
+            This issue has been marked stale after 21 days without activity.
+            It will close in 7 days unless there is new information.
+          close-issue-message: >
+            Closing due to inactivity. Please open a new issue if this is still
+            relevant and include current reproduction details.
+          stale-pr-message: >
+            This pull request has been marked stale after 21 days without
+            activity. It will close in 7 days unless it is updated.
+          close-pr-message: >
+            Closing due to inactivity. Please reopen or submit a fresh pull
+            request when the work is ready to continue.
+          remove-stale-when-updated: true

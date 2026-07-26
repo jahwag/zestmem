@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/console"
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/console"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 const (

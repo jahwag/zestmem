@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 func TestLimiterIsScopedPerPrincipalAndReturnsRetryGuidance(t *testing.T) {

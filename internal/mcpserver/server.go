@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/buildinfo"
-	"github.com/bytelope/zestmem/internal/embed"
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/buildinfo"
+	"github.com/jahwag/zestmem/internal/embed"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/startup"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
