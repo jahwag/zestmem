@@ -4,6 +4,8 @@
 
 ZestMem is self-hosted, durable memory for teams of autonomous agents. Codex, Claude Code, and OpenCode share useful decisions, facts, lessons, and procedures through one authenticated Streamable HTTP MCP endpoint—without capturing transcripts.
 
+[![ZestMem survives a service restart](docs/images/zestmem-demo.gif)](docs/images/zestmem-demo.mp4)
+
 ## What it provides
 
 - Hybrid full-text and vector recall, plus a read-only browser for exploring memories by Space, topic, and kind.
