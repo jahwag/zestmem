@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jahwag/zestmem/internal/authn"
 	"github.com/jahwag/zestmem/internal/mcpserver"
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/internal/postgres"
 	"github.com/jahwag/zestmem/internal/startup"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

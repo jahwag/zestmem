@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jahwag/zestmem/internal/authn"
 	"github.com/jahwag/zestmem/internal/buildinfo"
 	"github.com/jahwag/zestmem/internal/embed"
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/internal/startup"
-	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

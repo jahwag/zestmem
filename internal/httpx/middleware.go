@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jahwag/zestmem/internal/authn"
 	"github.com/google/uuid"
+	"github.com/jahwag/zestmem/internal/authn"
 )
 
 type Metrics struct {

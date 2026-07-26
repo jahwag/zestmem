@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 func TestAPIKeyAuthenticationUsesDigest(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jahwag/zestmem/internal/memory"
-	"github.com/jahwag/zestmem/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/migrations"
 )
 
 type Store struct {

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jahwag/zestmem/internal/authn"
 	"github.com/jahwag/zestmem/internal/buildinfo"
 	"github.com/jahwag/zestmem/internal/console"
@@ -22,7 +23,6 @@ import (
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/internal/postgres"
 	"github.com/jahwag/zestmem/internal/startup"
-	"github.com/google/uuid"
 )
 
 func main() {

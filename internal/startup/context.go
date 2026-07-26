@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/google/uuid"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 const (
