@@ -57,7 +57,7 @@ Open `http://127.0.0.1:8080/console/`. Enter an API key issued to a dedicated Pr
 
 <p align="center"><em>Browse and filter authorized memories. Memory content is blurred in this screenshot.</em></p>
 
-The console shows exact filtered authorized totals while browsing; browses newest memories; filters by Space, topic, kind, active/retracted status, revision, provenance, and date spans; searches a bounded ranked candidate pool by relevance; and distinguishes the authenticated Actor ID/current display name from optional claimed source attribution. Retracted memories require Maintainer access. Credentials stay in page memory by default; an opt-in uses tab-scoped session storage across refresh. **Lock** aborts requests and clears results, metadata, and that browser copy; it does not revoke the key. Memory bodies are rendered as text, never HTML.
+The console shows exact filtered authorized totals while browsing; browses newest memories; filters by Space, topic, kind, active/retracted status, revision, provenance, and date spans; searches a bounded ranked candidate pool by relevance; and distinguishes the authenticated Actor ID/current display name from optional claimed source attribution. Retracted memories require Maintainer access. A Reader API key, direct OIDC login, or trusted-edge assertion is exchanged for an opaque server-side browser session; bearer credentials are never stored by JavaScript. **Lock** revokes that browser session and clears displayed data; it does not revoke the underlying key or identity-provider credential. Memory bodies are rendered as text, never HTML.
 
 Agents can page or search authorized Topic and Provenance vocabularies with usage counts. `remember` and `revise_memory` return unfamiliar Topics plus established examples; retry with the exact `confirm_new_topics` set to introduce them intentionally. `read_memory` keeps its full-Memory response for compatibility. `read_memory_segment` defaults to at most 80 lines and 4 KiB, includes bounded topic/provenance plus freshness metadata, supports resumable line/byte windows, and accepts a regular expression for grep-style inspection.
 
@@ -72,14 +72,39 @@ ssh -N -L 18080:127.0.0.1:8080 memory-host
 
 ## Authentication
 
-For OIDC workload identity, set both values:
+For OIDC workload identity, configure the resource server:
 
 ```text
 OIDC_ISSUER=https://login.microsoftonline.com/TENANT_ID/v2.0
-OIDC_AUDIENCE=api://MEMORY_API_APP_ID
+OIDC_AUDIENCE=MEMORY_API_APP_ID
+OIDC_SUBJECT_CLAIM=oid
+OIDC_REQUIRED_ROLE=ZestMem.Agent
+MCP_RESOURCE_URI=https://memory.example.com/mcp
 ```
 
-Create a local Principal with the token's exact `iss` and `sub`, then grant that Principal to the required Spaces. Give each stable agent its own service principal or fallback key; do not share credentials. ZestMem stores only SHA-256 API-key digests and supports immediate revocation.
+Entra v2 access tokens put the resource application's bare client-ID GUID in
+`aud`; `api://MEMORY_API_APP_ID/.default` is the scope used when requesting
+the token, not the daemon's expected audience.
+
+Create a local Principal with the token's exact `iss` and configured subject
+claim, then grant that Principal to the required Spaces. Give each stable agent
+its own service principal or fallback key; do not share credentials. ZestMem
+stores only SHA-256 API-key digests and supports immediate revocation.
+
+The console has three independent, portable entry modes:
+
+- native Reader API-key exchange (always available);
+- standard Authorization Code + PKCE with
+  `CONSOLE_OIDC_ISSUER`, `CONSOLE_OIDC_CLIENT_ID`, and an optional client
+  secret;
+- a trusted-edge JWT assertion configured with
+  `CONSOLE_ASSERTION_ISSUER`, `CONSOLE_ASSERTION_AUDIENCE`,
+  `CONSOLE_ASSERTION_JWKS_URL`, and an exact `CONSOLE_PUBLIC_ORIGIN`.
+
+Both identity-provider modes still resolve `(issuer, subject)` through
+ZestMem's local Principal and Space-grant model. An edge assertion protects
+the human browser surface only; MCP clients authenticate directly to the MCP
+resource with OIDC or native keys.
 
 ## Operate and verify
 

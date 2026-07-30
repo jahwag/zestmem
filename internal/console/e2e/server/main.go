@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,6 +18,8 @@ import (
 const (
 	alphaSpace = "10000000-0000-0000-0000-000000000001"
 	betaSpace  = "20000000-0000-0000-0000-000000000002"
+	readerKey  = "am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	secondKey  = "am_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
 )
 
 type fixtureService struct{}
@@ -188,18 +192,39 @@ func browseItem(id, spaceID, title string, kind memory.Kind, excerpt string, upd
 	}
 }
 
-func protect(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		credential := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if credential != "zm_test_reader" && credential != "zm_test_second" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+type fixtureLookup struct{}
+
+func (fixtureLookup) ByExternalIdentity(context.Context, string, string) (memory.Principal, error) {
+	return memory.Principal{}, errors.New("external identity unavailable in fixture")
+}
+
+func (fixtureLookup) ByAPIKeyDigest(_ context.Context, digest []byte) (memory.Principal, error) {
+	for _, key := range []string{readerKey, secondKey} {
+		expected := sha256.Sum256([]byte(key))
+		if string(digest) == string(expected[:]) {
+			return memory.Principal{ID: key, Type: "human", DisplayName: "Fixture Reader"}, nil
 		}
-		principal := memory.Principal{ID: credential, Type: "human"}
-		next.ServeHTTP(w, r.WithContext(authn.WithPrincipal(r.Context(), principal)))
-	})
+	}
+	return memory.Principal{}, errors.New("invalid fixture credential")
 }
 
 func main() {
-	log.Fatal(http.ListenAndServe("127.0.0.1:4173", console.Handler(fixtureService{}, protect)))
+	sessions, err := authn.NewBrowserSessions(
+		authn.NewAPIKeyOnly(fixtureLookup{}),
+		nil,
+		"",
+		"",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	consoleHandler := console.Handler(fixtureService{}, sessions.Middleware)
+	mux := http.NewServeMux()
+	mux.Handle("/console/", consoleHandler)
+	mux.Handle("/api/v1/", consoleHandler)
+	mux.HandleFunc("POST /console/auth/token", sessions.LoginHandler)
+	mux.Handle("GET /console/auth/session", sessions.Middleware(http.HandlerFunc(sessions.SessionHandler)))
+	mux.HandleFunc("GET /console/auth/config", sessions.AuthConfigHandler)
+	mux.HandleFunc("POST /console/auth/logout", sessions.LogoutHandler)
+	log.Fatal(http.ListenAndServe("127.0.0.1:4173", mux))
 }

@@ -1,4 +1,6 @@
 const {test, expect} = require('@playwright/test');
+const readerKey = 'am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const secondKey = 'am_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
 
 test('browses, filters, searches, paginates, and safely renders memories', async ({page}) => {
   const requests = [];
@@ -8,7 +10,7 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('alert')).toContainText('invalid, expired, or revoked');
 
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.locator('#status')).toHaveText('2 of 3 matching active memories loaded');
   await expect(page.locator('#topic-meta')).toHaveText('2 of 2 matching values shown.');
@@ -96,32 +98,35 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.getByRole('heading', {name: 'Browse what your agents remember.'})).toBeVisible();
   await expect(page.locator('#memory pre')).toHaveCount(0);
   await expect(page.locator('#topic-values option')).toHaveCount(0);
-  await expect(page.getByLabel('Keep this tab unlocked after refresh')).not.toBeChecked();
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('button', {name: 'Browse newest'})).toBeHidden();
+  const activeCookies = await page.context().cookies();
+  expect(activeCookies).toHaveLength(1);
+  expect(activeCookies[0]).toMatchObject({name: 'zestmem_console_session', httpOnly: true, sameSite: 'Strict'});
+  expect(activeCookies[0].value).not.toContain(readerKey);
   await page.getByRole('button', {name: 'Lock'}).click();
   expect(await page.evaluate(() => ({local: localStorage.length, session: sessionStorage.length}))).toEqual({local: 0, session: 0});
   expect(await page.context().cookies()).toEqual([]);
-  expect(page.url()).not.toContain('zm_test_reader');
-  expect(requests.every(request => !request.url.includes('zm_test_reader') && !request.body.includes('zm_test_reader'))).toBe(true);
+  expect(page.url()).not.toContain(readerKey);
+  expect(requests.filter(request => !request.url.endsWith('/console/auth/token'))
+    .every(request => !request.url.includes(readerKey) && !request.body.includes(readerKey))).toBe(true);
 
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
-  await page.getByLabel('Keep this tab unlocked after refresh').check();
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('heading', {name: 'Memories'})).toBeVisible();
-  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('zestmem.console.credential'))).toBe('zm_test_reader');
+  expect(await page.evaluate(() => ({local: localStorage.length, session: sessionStorage.length}))).toEqual({local: 0, session: 0});
   await page.reload();
   await expect(page.getByRole('heading', {name: 'Memories'})).toBeVisible();
   await page.getByRole('button', {name: 'Lock'}).click();
-  expect(await page.evaluate(() => sessionStorage.getItem('zestmem.console.credential'))).toBeNull();
+  expect(await page.context().cookies()).toEqual([]);
 });
 
 test('Search commits visible advanced filters and exact provenance tokens', async ({page}) => {
   const requests = [];
   page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('heading', {name: 'Memories'})).toBeVisible();
 
@@ -145,7 +150,7 @@ test('Load more restarts with dirty advanced filters', async ({page}) => {
   const requests = [];
   page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('button', {name: 'Load more', exact: true})).toBeVisible();
 
@@ -162,7 +167,7 @@ test('invalid collapsed advanced filters do not corrupt search state', async ({p
   const requests = [];
   page.on('request', request => requests.push({url: request.url(), body: request.postData() || ''}));
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.locator('#status')).toContainText('matching active');
 
@@ -182,7 +187,7 @@ test('invalid collapsed advanced filters do not corrupt search state', async ({p
 
 test('failed filtered reload cannot reuse a stale cursor', async ({page}) => {
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('button', {name: 'Load more', exact: true})).toBeVisible();
   await page.route('**/api/v1/browse', async route => {
@@ -203,7 +208,7 @@ test('failed filtered reload cannot reuse a stale cursor', async ({page}) => {
 
 test('Lock aborts stale metadata from a previous credential', async ({page}) => {
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.locator('#status')).toContainText('matching active');
   await page.getByLabel('Topic').fill('slow');
@@ -215,7 +220,7 @@ test('Lock aborts stale metadata from a previous credential', async ({page}) => 
   await page.getByLabel('Topic').fill('slow');
   await page.waitForTimeout(250);
   await page.getByRole('button', {name: 'Lock'}).click();
-  await page.getByLabel('Bearer credential').fill('zm_test_second');
+  await page.getByLabel('Bearer credential').fill(secondKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.locator('#topic-meta')).toHaveText('2 of 2 matching values shown.');
   await page.waitForTimeout(900);

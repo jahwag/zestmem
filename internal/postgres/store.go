@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/migrations"
@@ -51,34 +52,46 @@ func (s *Store) ByExternalIdentity(ctx context.Context, issuer, subject string) 
 }
 
 func (s *Store) ByAPIKeyDigest(ctx context.Context, digest []byte) (memory.Principal, error) {
+	principal, _, err := s.ByAPIKeyDigestWithExpiry(ctx, digest)
+	return principal, err
+}
+
+func (s *Store) ByAPIKeyDigestWithExpiry(
+	ctx context.Context,
+	digest []byte,
+) (memory.Principal, time.Time, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return memory.Principal{}, err
+		return memory.Principal{}, time.Time{}, err
 	}
 	defer tx.Rollback(ctx)
 	var principal memory.Principal
 	var keyID string
+	var keyExpiry pgtype.Timestamptz
 	err = tx.QueryRow(ctx,
-		"SELECT p.id::text, p.type::text, p.display_name, k.id::text FROM api_keys k JOIN principals p ON p.id=k.principal_id "+
+		"SELECT p.id::text, p.type::text, p.display_name, k.id::text, k.expires_at FROM api_keys k JOIN principals p ON p.id=k.principal_id "+
 			"WHERE k.digest=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND p.disabled_at IS NULL",
 		digest,
-	).Scan(&principal.ID, &principal.Type, &principal.DisplayName, &keyID)
+	).Scan(&principal.ID, &principal.Type, &principal.DisplayName, &keyID, &keyExpiry)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return memory.Principal{}, memory.ErrNotFound
+		return memory.Principal{}, time.Time{}, memory.ErrNotFound
 	}
 	if err != nil {
-		return memory.Principal{}, err
+		return memory.Principal{}, time.Time{}, err
 	}
 	if _, err := tx.Exec(ctx, "UPDATE api_keys SET last_used_at=$1 WHERE id=$2", time.Now().UTC(), keyID); err != nil {
-		return memory.Principal{}, err
+		return memory.Principal{}, time.Time{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(actor_id,action,target_type,target_id,metadata) VALUES($1,'authenticate_api_key','principal',$2,jsonb_build_object('key_id',$3::text))`, principal.ID, principal.ID, keyID); err != nil {
-		return memory.Principal{}, err
+		return memory.Principal{}, time.Time{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return memory.Principal{}, err
+		return memory.Principal{}, time.Time{}, err
 	}
-	return principal, nil
+	if keyExpiry.Valid {
+		return principal, keyExpiry.Time, nil
+	}
+	return principal, time.Time{}, nil
 }
 
 func (s *Store) Require(ctx context.Context, principal memory.Principal, spaceID string, action memory.Action) error {

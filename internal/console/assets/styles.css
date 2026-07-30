@@ -105,6 +105,9 @@ main { max-width: 1600px; margin: auto; padding: 26px; }
 .login form { margin-top: 30px; }
 .login label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 750; }
 .login-control { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.oidc-login { display: block; width: fit-content; margin-top: 28px; text-decoration: none; }
+.login-divider { display: flex; align-items: center; gap: 12px; margin: 24px 0 0; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.login-divider::before, .login-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .session-choice { display: flex !important; align-items: start; gap: 10px; margin-top: 13px; cursor: pointer; }
 .session-choice input { width: 18px; min-height: 18px; margin: 2px 0 0; accent-color: var(--citrus); }
 .session-choice span { display: grid; gap: 2px; }

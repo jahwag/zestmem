@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/internal/postgres"
 	"github.com/jahwag/zestmem/internal/startup"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 func main() {
@@ -58,13 +61,90 @@ func main() {
 			slog.Error("OIDC_ISSUER and OIDC_AUDIENCE must be set together")
 			os.Exit(1)
 		}
-		authenticator, err = authn.New(ctx, issuer, audience, store)
+		authenticator, err = authn.NewWithOptions(
+			ctx,
+			issuer,
+			audience,
+			env("OIDC_SUBJECT_CLAIM", "sub"),
+			os.Getenv("OIDC_REQUIRED_ROLE"),
+			store,
+		)
 		if err != nil {
 			slog.Error("OIDC discovery", "error", err)
 			os.Exit(1)
 		}
 	} else {
 		authenticator = authn.NewAPIKeyOnly(store)
+	}
+	var consoleAssertion *authn.Authenticator
+	assertionIssuer := os.Getenv("CONSOLE_ASSERTION_ISSUER")
+	assertionAudience := os.Getenv("CONSOLE_ASSERTION_AUDIENCE")
+	assertionJWKSURL := os.Getenv("CONSOLE_ASSERTION_JWKS_URL")
+	if assertionIssuer != "" || assertionAudience != "" || assertionJWKSURL != "" {
+		if assertionIssuer == "" || assertionAudience == "" || assertionJWKSURL == "" {
+			slog.Error("CONSOLE_ASSERTION_ISSUER, CONSOLE_ASSERTION_AUDIENCE, and CONSOLE_ASSERTION_JWKS_URL must be set together")
+			os.Exit(2)
+		}
+		consoleAssertion, err = authn.NewWithRemoteKeySet(
+			ctx,
+			assertionIssuer,
+			assertionAudience,
+			assertionJWKSURL,
+			env("CONSOLE_ASSERTION_SUBJECT_CLAIM", "sub"),
+			os.Getenv("CONSOLE_ASSERTION_REQUIRED_ROLE"),
+			store,
+		)
+		if err != nil {
+			slog.Error("configure console assertion authentication", "error", err)
+			os.Exit(2)
+		}
+	}
+	consolePublicOrigin := os.Getenv("CONSOLE_PUBLIC_ORIGIN")
+	consoleSessions, err := authn.NewBrowserSessions(
+		authenticator,
+		consoleAssertion,
+		env("CONSOLE_ASSERTION_HEADER", "Cf-Access-Jwt-Assertion"),
+		consolePublicOrigin,
+	)
+	if err != nil {
+		slog.Error("configure console authentication", "error", err)
+		os.Exit(2)
+	}
+	consoleOIDCIssuer := os.Getenv("CONSOLE_OIDC_ISSUER")
+	consoleOIDCClientID := os.Getenv("CONSOLE_OIDC_CLIENT_ID")
+	if consoleOIDCIssuer != "" || consoleOIDCClientID != "" {
+		if consoleOIDCIssuer == "" || consoleOIDCClientID == "" {
+			slog.Error("CONSOLE_OIDC_ISSUER and CONSOLE_OIDC_CLIENT_ID must be set together")
+			os.Exit(2)
+		}
+		redirectURL := os.Getenv("CONSOLE_OIDC_REDIRECT_URL")
+		expectedRedirectURL := ""
+		if consolePublicOrigin != "" {
+			expectedRedirectURL = strings.TrimSuffix(consolePublicOrigin, "/") + "/console/auth/oidc/callback"
+		}
+		if redirectURL == "" {
+			redirectURL = expectedRedirectURL
+		}
+		if expectedRedirectURL != "" && redirectURL != expectedRedirectURL {
+			slog.Error("CONSOLE_OIDC_REDIRECT_URL must match CONSOLE_PUBLIC_ORIGIN callback")
+			os.Exit(2)
+		}
+		consoleOIDC, err := authn.NewBrowserOIDC(
+			ctx,
+			consoleOIDCIssuer,
+			consoleOIDCClientID,
+			os.Getenv("CONSOLE_OIDC_CLIENT_SECRET"),
+			redirectURL,
+			strings.Fields(os.Getenv("CONSOLE_OIDC_SCOPES")),
+			env("CONSOLE_OIDC_SUBJECT_CLAIM", "sub"),
+			os.Getenv("CONSOLE_OIDC_REQUIRED_ROLE"),
+			store,
+		)
+		if err != nil {
+			slog.Error("configure console OIDC", "error", err)
+			os.Exit(1)
+		}
+		consoleSessions.WithOIDC(consoleOIDC)
 	}
 	metrics := &httpx.Metrics{}
 	startupApprovals, err := startup.ParseApprovals(os.Getenv("ZESTMEM_STARTUP_CUE_APPROVALS"))
@@ -78,12 +158,34 @@ func main() {
 	mcpMemoryServer := mcpserver.New(domain, metrics).WithStartupApprovals(startupApprovals)
 	mcpHandler := mcpMemoryServer.Handler()
 	limiter := httpx.NewLimiter(envInt("RATE_LIMIT_PER_MINUTE", 120), envInt("RATE_LIMIT_BURST", 20), metrics)
-	protect := func(next http.Handler) http.Handler { return authenticator.Middleware(limiter.Middleware(next)) }
+	protect := func(next http.Handler) http.Handler { return consoleSessions.Middleware(limiter.Middleware(next)) }
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", authenticator.Middleware(limiter.Middleware(http.MaxBytesHandler(mcpHandler, 1<<20))))
+	mcpResourceURI := env("MCP_RESOURCE_URI", "http://127.0.0.1:8080/mcp")
+	mcpResourceMetadataURL := env(
+		"MCP_RESOURCE_METADATA_URL",
+		strings.TrimSuffix(mcpResourceURI, "/mcp")+"/.well-known/oauth-protected-resource/mcp",
+	)
+	registerMCPRoutes(
+		mux,
+		limiter.Middleware(http.MaxBytesHandler(mcpHandler, 1<<20)),
+		authenticator.TokenVerifier,
+		issuer,
+		mcpResourceURI,
+		mcpResourceMetadataURL,
+		strings.Fields(os.Getenv("OIDC_SCOPES")),
+	)
 	consoleHandler := console.Handler(domain, protect)
 	mux.Handle("/console/", consoleHandler)
 	mux.Handle("/api/v1/", consoleHandler)
+	mux.HandleFunc("POST /console/auth/token", consoleSessions.LoginHandler)
+	mux.Handle("GET /console/auth/session", consoleSessions.Middleware(http.HandlerFunc(consoleSessions.SessionHandler)))
+	mux.HandleFunc("GET /console/auth/config", consoleSessions.AuthConfigHandler)
+	mux.Handle(
+		"GET /console/auth/oidc/start",
+		limiter.Middleware(http.HandlerFunc(consoleSessions.OIDCStartHandler)),
+	)
+	mux.HandleFunc("GET /console/auth/oidc/callback", consoleSessions.OIDCCallbackHandler)
+	mux.HandleFunc("POST /console/auth/logout", consoleSessions.LogoutHandler)
 	mux.HandleFunc("GET /console", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
 	})
@@ -159,6 +261,31 @@ func main() {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func registerMCPRoutes(
+	mux *http.ServeMux,
+	handler http.Handler,
+	verifier auth.TokenVerifier,
+	issuer string,
+	resourceURI string,
+	resourceMetadataURL string,
+	scopes []string,
+) {
+	options := &auth.RequireBearerTokenOptions{AllowMissingExpiration: true}
+	if issuer != "" {
+		options.ResourceMetadataURL = resourceMetadataURL
+		metadata := &oauthex.ProtectedResourceMetadata{
+			Resource:             resourceURI,
+			AuthorizationServers: []string{issuer},
+			ScopesSupported:      scopes,
+		}
+		mux.Handle(
+			"GET /.well-known/oauth-protected-resource/mcp",
+			auth.ProtectedResourceMetadataHandler(metadata),
+		)
+	}
+	mux.Handle("/mcp", auth.RequireBearerToken(verifier, options)(handler))
 }
 
 func canonicalSpaceID(value string) (string, error) {

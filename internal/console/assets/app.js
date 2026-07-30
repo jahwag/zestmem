@@ -1,7 +1,6 @@
 (() => {
   'use strict';
 
-  let token = '';
   let spaces = [];
   let catalogCursor = '';
   let catalogTotal = 0;
@@ -18,20 +17,8 @@
   let authController = new AbortController();
   let committedAdvancedFilters = {statuses: ['active']};
   const $ = id => document.getElementById(id);
-  const sessionKey = 'zestmem.console.credential';
   const metadataTimers = new Map();
   const metadataGenerations = new Map();
-
-  function sessionCredential(value) {
-    try {
-      if (value === undefined) return sessionStorage.getItem(sessionKey) || '';
-      if (value) sessionStorage.setItem(sessionKey, value);
-      else sessionStorage.removeItem(sessionKey);
-    } catch (_) {
-      return '';
-    }
-    return value;
-  }
 
   class APIError extends Error {
     constructor(message, status) {
@@ -52,11 +39,10 @@
 
   async function api(path, options = {}) {
     const generation = authGeneration;
-    const credential = token;
-    const headers = {...(options.headers || {}), Authorization: `Bearer ${token}`};
+    const headers = {...(options.headers || {})};
     if (options.body) headers['Content-Type'] = 'application/json';
-    const response = await fetch(path, {...options, headers, signal: authController.signal, cache: 'no-store'});
-    if (generation !== authGeneration || credential !== token) throw new DOMException('Stale session', 'AbortError');
+    const response = await fetch(path, {...options, headers, credentials: 'same-origin', signal: authController.signal, cache: 'no-store'});
+    if (generation !== authGeneration) throw new DOMException('Stale session', 'AbortError');
     if (!response.ok) {
       const message = response.status === 401
         ? 'That credential is invalid, expired, or revoked.'
@@ -465,7 +451,7 @@
   }
 
   function handleError(error, target) {
-    if (error instanceof APIError && error.status === 401 && token) {
+    if (error instanceof APIError && error.status === 401) {
       lock();
       $('login-error').textContent = error.message;
       return;
@@ -519,8 +505,7 @@
 
   function lock() {
     newAuthSession();
-    token = '';
-    sessionCredential('');
+    fetch('/console/auth/logout', {method: 'POST', credentials: 'same-origin', cache: 'no-store'}).catch(() => {});
     spaces = [];
     catalogCursor = '';
     catalogTotal = 0;
@@ -538,7 +523,6 @@
     $('clear-search').hidden = true;
     clearFilterValues();
     committedAdvancedFilters = {statuses: ['active']};
-    $('keep-session').checked = false;
     $('workspace').hidden = true;
     $('connection').hidden = true;
     $('login').hidden = false;
@@ -551,34 +535,53 @@
     $('token').focus();
   }
 
+  async function configureLoginMethods() {
+    const response = await fetch('/console/auth/config', {
+      credentials: 'same-origin', cache: 'no-store'
+    }).catch(() => null);
+    if (!response?.ok) return;
+    const config = await response.json().catch(() => ({}));
+    $('oidc-login').hidden = !config.oidc;
+    $('login-divider').hidden = !config.oidc;
+  }
+
+  async function openMemoryBrowser() {
+    const catalog = await loadCatalogPage();
+    spaces = catalog.spaces || [];
+    catalogCursor = catalog.next_cursor || '';
+    catalogTotal = spaces.length + (catalog.omitted_count || 0);
+    $('token').value = '';
+    renderSpaces();
+    $('login').hidden = true;
+    $('workspace').hidden = false;
+    $('connection').hidden = false;
+    mode = 'browse';
+    committedQuery = '';
+    await refreshMetadata();
+    await loadResults(false);
+    $('query').focus();
+  }
+
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault();
-    token = $('token').value.trim();
+    const credential = $('token').value.trim();
     newAuthSession();
     $('login-error').textContent = '';
     const submit = event.submitter;
     submit.disabled = true;
     submit.textContent = 'Connecting…';
     try {
-      const catalog = await loadCatalogPage();
-      spaces = catalog.spaces || [];
-      catalogCursor = catalog.next_cursor || '';
-      catalogTotal = spaces.length + (catalog.omitted_count || 0);
-      sessionCredential($('keep-session').checked ? token : '');
-      $('token').value = '';
-      renderSpaces();
-      $('login').hidden = true;
-      $('workspace').hidden = false;
-      $('connection').hidden = false;
-      mode = 'browse';
-      committedQuery = '';
-      await refreshMetadata();
-      await loadResults(false);
-      $('query').focus();
+      const login = await fetch('/console/auth/token', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({token: credential})
+      });
+      if (!login.ok) throw new APIError('That credential is invalid, expired, or revoked.', login.status);
+      await openMemoryBrowser();
     } catch (error) {
       if (stale(error)) return;
-      token = '';
-      sessionCredential('');
       $('login-error').textContent = error.message;
       $('token').focus();
     } finally {
@@ -665,10 +668,18 @@
   drawerBreakpoint.addEventListener('change', normalizeDrawer);
   window.addEventListener('resize', normalizeDrawer);
   new ResizeObserver(normalizeDrawer).observe(document.documentElement);
-  const savedCredential = sessionCredential();
-  if (savedCredential) {
-    $('keep-session').checked = true;
-    $('token').value = savedCredential;
-    $('login-form').requestSubmit();
-  }
+  (async () => {
+    await configureLoginMethods();
+    const response = await fetch('/console/auth/session', {
+      credentials: 'same-origin', cache: 'no-store'
+    }).catch(() => null);
+    if (response?.ok) {
+      newAuthSession();
+      try {
+        await openMemoryBrowser();
+      } catch (error) {
+        if (!stale(error)) lock();
+      }
+    }
+  })();
 })();

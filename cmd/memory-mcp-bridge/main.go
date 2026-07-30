@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -103,6 +104,9 @@ func main() {
 	}
 	ctx := context.Background()
 	endpoint := required("MEMORY_MCP_URL")
+	if err := validateEndpoint(endpoint); err != nil {
+		log.Fatal(err)
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--startup-context" {
 		startupCtx, cancel := context.WithTimeout(ctx, startupRequestTimeout)
 		defer cancel()
@@ -200,7 +204,9 @@ func writeStartupContext(ctx context.Context, endpoint string, httpClient *http.
 
 func authenticatedClient(ctx context.Context) (*http.Client, error) {
 	if token := os.Getenv("MEMORY_TOKEN"); token != "" {
-		return &http.Client{Transport: bearerTransport{token: token, base: http.DefaultTransport}}, nil
+		return authenticatedHTTPClient(
+			bearerTransport{token: token, base: http.DefaultTransport},
+		), nil
 	}
 	scope := os.Getenv("MEMORY_SCOPE")
 	if scope == "" {
@@ -210,12 +216,50 @@ func authenticatedClient(ctx context.Context) (*http.Client, error) {
 		}
 		scope = audience + "/.default"
 	}
-	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	credential, err := azidentity.NewDefaultAzureCredential(
+		&azidentity.DefaultAzureCredentialOptions{
+			RequireAzureTokenCredentials: true,
+		},
+	)
 	if err != nil {
 		return nil, errors.New("initialize Azure credential: " + err.Error())
 	}
 	tokens := oauth2.ReuseTokenSource(nil, azureTokenSource{ctx: ctx, credential: credential, scope: scope})
-	return oauth2.NewClient(ctx, tokens), nil
+	client := oauth2.NewClient(ctx, tokens)
+	client.CheckRedirect = rejectAuthenticatedRedirect
+	return client, nil
+}
+
+func authenticatedHTTPClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport:     transport,
+		CheckRedirect: rejectAuthenticatedRedirect,
+	}
+}
+
+func rejectAuthenticatedRedirect(*http.Request, []*http.Request) error {
+	return errors.New("authenticated MCP redirects are disabled")
+}
+
+func validateEndpoint(raw string) error {
+	if raw == "" {
+		return errors.New("MEMORY_MCP_URL is required")
+	}
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.User != nil || endpoint.Host == "" ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return errors.New("MEMORY_MCP_URL must be an absolute URL without credentials, query, or fragment")
+	}
+	if endpoint.Scheme == "https" {
+		return nil
+	}
+	host := endpoint.Hostname()
+	ip := net.ParseIP(host)
+	if endpoint.Scheme == "http" &&
+		(host == "localhost" || (ip != nil && ip.IsLoopback())) {
+		return nil
+	}
+	return errors.New("MEMORY_MCP_URL must use HTTPS, except for HTTP loopback development")
 }
 
 func required(name string) string {

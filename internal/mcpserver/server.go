@@ -14,6 +14,7 @@ import (
 	"github.com/jahwag/zestmem/internal/embed"
 	"github.com/jahwag/zestmem/internal/memory"
 	"github.com/jahwag/zestmem/internal/startup"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -58,7 +59,14 @@ func (s *Server) observed(operation string, start time.Time, err error) {
 }
 
 func (s *Server) Handler() http.Handler {
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s.mcp }, nil)
+	return mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s.mcp },
+		&mcp.StreamableHTTPOptions{
+			// memoryd binds loopback and owns the authenticated public edge.
+			// Permit the reverse proxy's public Host after bearer verification.
+			DisableLocalhostProtection: true,
+		},
+	)
 }
 
 type catalogInput struct {
@@ -374,10 +382,15 @@ func compactMutation(result memory.MutationResult) any {
 
 func principal(ctx context.Context) (memory.Principal, error) {
 	p, ok := authn.PrincipalFromContext(ctx)
-	if !ok {
-		return memory.Principal{}, authn.ErrUnauthenticated
+	if ok {
+		return p, nil
 	}
-	return p, nil
+	if tokenInfo := auth.TokenInfoFromContext(ctx); tokenInfo != nil && tokenInfo.Extra != nil {
+		if p, ok := tokenInfo.Extra["principal"].(memory.Principal); ok {
+			return p, nil
+		}
+	}
+	return memory.Principal{}, authn.ErrUnauthenticated
 }
 
 func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
