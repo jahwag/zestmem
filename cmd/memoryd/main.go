@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -80,6 +81,17 @@ func main() {
 	assertionIssuer := os.Getenv("CONSOLE_ASSERTION_ISSUER")
 	assertionAudience := os.Getenv("CONSOLE_ASSERTION_AUDIENCE")
 	assertionJWKSURL := os.Getenv("CONSOLE_ASSERTION_JWKS_URL")
+	if err := validateConsoleAuthoritySeparation(
+		issuer,
+		audience,
+		assertionIssuer,
+		assertionAudience,
+		os.Getenv("CONSOLE_OIDC_ISSUER"),
+		os.Getenv("CONSOLE_OIDC_CLIENT_ID"),
+	); err != nil {
+		slog.Error("configure console authority separation", "error", err)
+		os.Exit(2)
+	}
 	if assertionIssuer != "" || assertionAudience != "" || assertionJWKSURL != "" {
 		if assertionIssuer == "" || assertionAudience == "" || assertionJWKSURL == "" {
 			slog.Error("CONSOLE_ASSERTION_ISSUER, CONSOLE_ASSERTION_AUDIENCE, and CONSOLE_ASSERTION_JWKS_URL must be set together")
@@ -245,12 +257,38 @@ func protectConsoleAPI(
 	browser := sessions.Middleware(limited)
 	bearer := authenticator.Middleware(limited)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-			bearer.ServeHTTP(w, r)
-			return
+		for _, value := range r.Header.Values("Authorization") {
+			if strings.TrimSpace(value) != "" {
+				bearer.ServeHTTP(w, r)
+				return
+			}
 		}
 		browser.ServeHTTP(w, r)
 	})
+}
+
+func validateConsoleAuthoritySeparation(
+	resourceIssuer string,
+	resourceAudience string,
+	assertionIssuer string,
+	assertionAudience string,
+	browserIssuer string,
+	browserClientID string,
+) error {
+	resourceIssuer = strings.TrimSpace(resourceIssuer)
+	resourceAudience = strings.TrimSpace(resourceAudience)
+	if resourceIssuer == "" || resourceAudience == "" {
+		return nil
+	}
+	if resourceIssuer == strings.TrimSpace(assertionIssuer) &&
+		resourceAudience == strings.TrimSpace(assertionAudience) {
+		return errors.New("console assertion issuer and audience must differ from the MCP OIDC authority")
+	}
+	if resourceIssuer == strings.TrimSpace(browserIssuer) &&
+		resourceAudience == strings.TrimSpace(browserClientID) {
+		return errors.New("console OIDC issuer and client ID must differ from the MCP OIDC authority")
+	}
+	return nil
 }
 
 func newConsoleBrowserOIDC(
@@ -295,20 +333,33 @@ func newConsoleBrowserOIDC(
 }
 
 func loadOptionalSecret(valueEnv, fileEnv string) (string, error) {
+	const (
+		maxSecretBytes     = 4096
+		maxSecretFileBytes = maxSecretBytes + 2 // Permit one trailing CRLF.
+	)
+
 	value := strings.TrimSpace(os.Getenv(valueEnv))
 	path := strings.TrimSpace(os.Getenv(fileEnv))
 	if value != "" && path != "" {
 		return "", fmt.Errorf("%s and %s are mutually exclusive", valueEnv, fileEnv)
 	}
 	if path != "" {
-		raw, err := os.ReadFile(path)
+		file, err := os.Open(path)
 		if err != nil {
 			return "", err
 		}
+		defer file.Close()
+		raw, err := io.ReadAll(io.LimitReader(file, maxSecretFileBytes+1))
+		if err != nil {
+			return "", err
+		}
+		if len(raw) > maxSecretFileBytes {
+			return "", fmt.Errorf("%s must contain at most %d secret bytes with an optional line ending", fileEnv, maxSecretBytes)
+		}
 		value = strings.TrimSpace(string(raw))
 	}
-	if len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00") {
-		return "", fmt.Errorf("%s must be at most 4096 bytes without newlines", valueEnv)
+	if len(value) > maxSecretBytes || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("%s must be at most %d bytes without newlines", valueEnv, maxSecretBytes)
 	}
 	return value, nil
 }

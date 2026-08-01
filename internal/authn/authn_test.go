@@ -222,6 +222,37 @@ func TestEmptyCredentialIsRejected(t *testing.T) {
 	}
 }
 
+func TestBearerMiddlewareAcceptsCaseInsensitiveScheme(t *testing.T) {
+	lookup := &fakeLookup{principal: memory.Principal{ID: "agent", Type: "agent"}}
+	handler := NewAPIKeyOnly(lookup).Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
+	request.Header.Set("Authorization", "bearer am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("lowercase bearer status = %d", response.Code)
+	}
+}
+
+func TestBearerMiddlewareRejectsDuplicateAuthorization(t *testing.T) {
+	reached := false
+	handler := NewAPIKeyOnly(&fakeLookup{principal: memory.Principal{ID: "agent", Type: "agent"}}).Middleware(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reached = true
+		}),
+	)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
+	request.Header.Add("Authorization", "Bearer am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	request.Header.Add("Authorization", "Bearer am_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || reached {
+		t.Fatalf("duplicate authorization status = %d, reached = %v", response.Code, reached)
+	}
+}
+
 func TestRemoteKeySetThrottlesUnknownKeysAndClassifiesOutage(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

@@ -31,6 +31,54 @@ func TestCanonicalSpaceIDNormalizesValidAliases(t *testing.T) {
 	}
 }
 
+func TestConsoleIdentityProvidersCannotReuseMCPAuthority(t *testing.T) {
+	const (
+		resourceIssuer   = "https://identity.example.test/tenant/v2.0"
+		resourceAudience = "zestmem-api"
+	)
+	for _, test := range []struct {
+		name              string
+		assertionIssuer   string
+		assertionAudience string
+		browserIssuer     string
+		browserClientID   string
+	}{
+		{
+			name:              "trusted edge assertion",
+			assertionIssuer:   resourceIssuer,
+			assertionAudience: resourceAudience,
+		},
+		{
+			name:            "browser OIDC",
+			browserIssuer:   resourceIssuer,
+			browserClientID: resourceAudience,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateConsoleAuthoritySeparation(
+				resourceIssuer,
+				resourceAudience,
+				test.assertionIssuer,
+				test.assertionAudience,
+				test.browserIssuer,
+				test.browserClientID,
+			); err == nil {
+				t.Fatal("MCP authority reused for browser authentication")
+			}
+		})
+	}
+	if err := validateConsoleAuthoritySeparation(
+		resourceIssuer,
+		resourceAudience,
+		resourceIssuer,
+		"edge-audience",
+		resourceIssuer,
+		"browser-client",
+	); err != nil {
+		t.Fatalf("distinct console audiences rejected: %v", err)
+	}
+}
+
 func TestRegisterMCPRoutesPublishesRFC9728MetadataAndChallenge(t *testing.T) {
 	const (
 		issuer      = "https://login.example.test/tenant/v2.0"
@@ -229,6 +277,48 @@ func TestConsoleAPIProtectionPreservesBearerClients(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("bearer console API status=%d, want 204", response.Code)
+	}
+}
+
+func TestConsoleAPIAuthorizationHeaderNeverFallsBackToBrowserSession(t *testing.T) {
+	lookup := staticPrincipalLookup{principal: memory.Principal{ID: "reader-1", Type: "human"}}
+	authenticator := authn.NewAPIKeyOnly(lookup)
+	sessions, err := authn.NewBrowserSessions(authenticator, nil, "", "https://memory.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := httptest.NewRequest(
+		http.MethodPost,
+		"https://memory.example.test/console/auth/token",
+		strings.NewReader(`{"token":"am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`),
+	)
+	login.Host = "memory.example.test"
+	login.Header.Set("Origin", "https://memory.example.test")
+	login.Header.Set("Content-Type", "application/json")
+	loginResponse := httptest.NewRecorder()
+	sessions.LoginHandler(loginResponse, login)
+	if loginResponse.Code != http.StatusOK || len(loginResponse.Result().Cookies()) != 1 {
+		t.Fatalf("browser login status = %d, cookies = %+v", loginResponse.Code, loginResponse.Result().Cookies())
+	}
+
+	reached := false
+	handler := protectConsoleAPI(
+		sessions,
+		authenticator,
+		httpx.NewLimiter(120, 20, &httpx.Metrics{}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reached = true
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	)
+	request := httptest.NewRequest(http.MethodGet, "https://memory.example.test/api/v1/catalog", nil)
+	request.Host = "memory.example.test"
+	request.Header.Set("Authorization", "Basic attacker-controlled")
+	request.AddCookie(loginResponse.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || reached {
+		t.Fatalf("malformed authorization status = %d, reached = %v", response.Code, reached)
 	}
 }
 

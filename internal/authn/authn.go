@@ -304,13 +304,13 @@ func PrincipalFromContext(ctx context.Context) (memory.Principal, bool) {
 
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
+		token, ok := bearerCredential(r.Header)
+		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-memory"`)
 			http.Error(w, "missing bearer credential", http.StatusUnauthorized)
 			return
 		}
-		principal, err := a.Authenticate(r.Context(), strings.TrimPrefix(header, "Bearer "))
+		principal, err := a.Authenticate(r.Context(), token)
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-memory", error="invalid_token"`)
 			http.Error(w, "invalid bearer credential", http.StatusUnauthorized)
@@ -318,4 +318,16 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 	})
+}
+
+func bearerCredential(header http.Header) (string, bool) {
+	values := header.Values("Authorization")
+	if len(values) != 1 {
+		return "", false
+	}
+	fields := strings.Fields(values[0])
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || fields[1] == "" {
+		return "", false
+	}
+	return fields[1], true
 }
