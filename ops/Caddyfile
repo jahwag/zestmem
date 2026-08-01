@@ -1,3 +1,6 @@
 {$MEMORY_DOMAIN:localhost} {
+	@operational path /healthz /readyz /metrics
+	respond @operational 404
+
 	reverse_proxy memory:8080
 }

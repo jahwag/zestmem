@@ -40,6 +40,11 @@ type cooldownTransport struct {
 }
 
 func newOIDCClientContext(ctx context.Context) (context.Context, *cooldownTransport) {
+	client, transport := newOIDCClient()
+	return oidc.ClientContext(ctx, client), transport
+}
+
+func newOIDCClient() (*http.Client, *cooldownTransport) {
 	transport := &cooldownTransport{
 		base:     http.DefaultTransport,
 		cooldown: jwksRefreshCooldown,
@@ -48,8 +53,20 @@ func newOIDCClientContext(ctx context.Context) (context.Context, *cooldownTransp
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   verifierHTTPTimeout,
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("OIDC redirect limit exceeded")
+			}
+			if err := validateBrowserOIDCURL(request.URL.String(), "redirect target"); err != nil {
+				return err
+			}
+			if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && request.URL.Scheme != "https" {
+				return errors.New("OIDC redirects must not downgrade HTTPS")
+			}
+			return nil
+		},
 	}
-	return oidc.ClientContext(ctx, client), transport
+	return client, transport
 }
 
 func (t *cooldownTransport) failureCount() uint64 {

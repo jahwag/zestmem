@@ -72,6 +72,29 @@ ssh -N -L 18080:127.0.0.1:8080 memory-host
 
 ## Authentication
 
+### Native browser OIDC
+
+The console supports portable Authorization Code + PKCE login with any standards-compliant OIDC provider. Configure an exact externally visible HTTPS origin and callback in both ZestMem and the provider. Paths, ports, and trailing slashes are significant:
+
+```text
+CONSOLE_PUBLIC_ORIGIN=https://memory.example.com
+CONSOLE_OIDC_ISSUER=https://idp.example.com/realms/agents
+CONSOLE_OIDC_CLIENT_ID=zestmem-console
+CONSOLE_OIDC_REDIRECT_URL=https://memory.example.com/console/auth/oidc/callback
+CONSOLE_OIDC_SUBJECT_CLAIM=sub
+CONSOLE_OIDC_SCOPES="openid profile"
+```
+
+The client secret is optional for public clients. For confidential clients, the inline `CONSOLE_OIDC_CLIENT_SECRET` and file-based `CONSOLE_OIDC_CLIENT_SECRET_FILE` settings are mutually exclusive. When using the file setting in a container, mount the secret read-only at that path; standard container-secret modes such as `0444` are accepted, and the secret must remain confined to the intended container/process boundary. The bundled Compose file passes the path through but does not choose a host secret store or mount on the operator's behalf. Public origins and discovered authorization, token, and JWKS endpoints must use HTTPS; loopback HTTP is accepted for local development. Provider discovery is lazy and retryable, so an unavailable provider does not stop `memoryd` from starting.
+
+Create a local Principal whose external identity binding exactly matches the configured issuer and selected subject claim. Browser sessions retain that external identity and re-check the binding on every request: disabling the Principal or removing the binding ends its access immediately. A new login replaces the current browser session; sessions are also bounded per Principal.
+
+Browser OIDC and MCP authentication are deliberately separate. Browser login creates an opaque, HTTP-only local session for the console and its `/api/v1/*` REST requests; existing bearer API clients remain compatible on those REST routes. MCP clients authenticate directly at `/mcp` with the MCP resource's OIDC access token or a native API key. A reverse proxy such as Caddy supplies TLS and origin routing; a separate access proxy is optional, not required by ZestMem. Set `CONSOLE_PUBLIC_ORIGIN` to the exact external HTTPS origin whenever a proxy serves the console, including API-key-only deployments, so Host, Origin, and secure-cookie checks use the browser-visible scheme.
+
+`CONSOLE_AUTH_RATE_LIMIT_PER_MINUTE` and `CONSOLE_AUTH_RATE_LIMIT_BURST` configure a process-wide backstop for API-key browser login, applied after cheap request validation and before credential lookup. OIDC token exchanges have a separate eight-request concurrency bound. Internet-facing deployments should additionally apply per-client rate limiting to all authentication routes at their trusted reverse proxy. Browser sessions and in-progress OIDC flows are process-local; run one UI replica or use sticky routing. A process restart invalidates browser sessions and in-progress logins without affecting MCP credentials or stored memories.
+
+The console's **Lock** action revokes only the local browser session and clears displayed data. It does not sign out of the upstream identity provider or revoke the underlying identity-provider credential.
+
 For OIDC workload identity, configure the resource server:
 
 ```text

@@ -2,6 +2,7 @@ package authn
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/jahwag/zestmem/internal/memory"
@@ -86,25 +88,116 @@ func TestOIDCValidatesIssuerAudienceAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(audience string, expiry time.Time) string {
+	sign := func(audience string, expiry time.Time, extra map[string]any) string {
 		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: key, KeyID: "test"}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: issuer, Subject: "agent-subject", Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(time.Now()), Expiry: jwt.NewNumericDate(expiry)}).Serialize()
+		builder := jwt.Signed(signer).Claims(jwt.Claims{Issuer: issuer, Subject: "agent-subject", Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(time.Now()), Expiry: jwt.NewNumericDate(expiry)})
+		if extra != nil {
+			builder = builder.Claims(extra)
+		}
+		raw, err := builder.Serialize()
 		if err != nil {
 			t.Fatal(err)
 		}
 		return raw
 	}
-	if p, err := auth.Authenticate(context.Background(), sign("memory-api", time.Now().Add(time.Hour))); err != nil || p.ID != "agent" {
+	if p, err := auth.Authenticate(context.Background(), sign("memory-api", time.Now().Add(time.Hour), nil)); err != nil || p.ID != "agent" {
 		t.Fatalf("valid token principal=%#v error=%v", p, err)
 	}
-	if _, err := auth.Authenticate(context.Background(), sign("other-api", time.Now().Add(time.Hour))); !errors.Is(err, ErrUnauthenticated) {
+	if _, err := auth.Authenticate(context.Background(), sign("other-api", time.Now().Add(time.Hour), nil)); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("wrong audience error=%v", err)
 	}
-	if _, err := auth.Authenticate(context.Background(), sign("memory-api", time.Now().Add(-time.Hour))); !errors.Is(err, ErrUnauthenticated) {
+	if _, err := auth.Authenticate(context.Background(), sign("memory-api", time.Now().Add(-time.Hour), nil)); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("expired token error=%v", err)
+	}
+	if p, err := auth.Authenticate(context.Background(), sign("memory-api", time.Now().Add(time.Hour), map[string]any{
+		"roles": "provider-specific-role-shape",
+		"scp":   []string{"provider-specific-scope-shape"},
+	})); err != nil || p.ID != "agent" {
+		t.Fatalf("irrelevant custom claims principal=%#v error=%v", p, err)
+	}
+	info, err := auth.TokenVerifier(context.Background(), sign("memory-api", time.Now().Add(time.Hour), map[string]any{
+		"scope": "standard.read standard.write",
+		"scp":   "entra.read",
+		"roles": []string{"ZestMem.Agent"},
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(info.Scopes, " "), "standard.read standard.write entra.read"; got != want {
+		t.Fatalf("token scopes = %q, want %q", got, want)
+	}
+}
+
+func TestOIDCAuthorizedPartyPolicyDistinguishesIDAndAccessTokens(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		issuer   = "https://identity.example"
+		audience = "memory-api"
+	)
+	lookup := &fakeLookup{principal: memory.Principal{ID: "agent", Type: "agent"}}
+	authenticator := &Authenticator{
+		issuer:                  issuer,
+		audience:                audience,
+		subjectClaim:            "sub",
+		validateAuthorizedParty: true,
+		verifier: oidc.NewVerifier(
+			issuer,
+			&oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&key.PublicKey}},
+			&oidc.Config{ClientID: audience},
+		),
+		lookup: lookup,
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: key, KeyID: "test"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(audiences jwt.Audience, authorizedParty string) string {
+		t.Helper()
+		builder := jwt.Signed(signer).Claims(jwt.Claims{
+			Issuer:   issuer,
+			Subject:  "agent-subject",
+			Audience: audiences,
+			IssuedAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+			Expiry:   jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		})
+		if authorizedParty != "" {
+			builder = builder.Claims(map[string]any{"azp": authorizedParty})
+		}
+		raw, err := builder.Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	multipleAudiences := jwt.Audience{audience, "another-api"}
+	if _, err := authenticator.Authenticate(context.Background(), sign(multipleAudiences, "")); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("missing azp error = %v", err)
+	}
+	if _, err := authenticator.Authenticate(context.Background(), sign(multipleAudiences, "another-api")); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("wrong azp error = %v", err)
+	}
+	if _, err := authenticator.Authenticate(context.Background(), sign(jwt.Audience{audience}, "another-api")); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("single-audience wrong azp error = %v", err)
+	}
+	if principal, err := authenticator.Authenticate(context.Background(), sign(multipleAudiences, audience)); err != nil || principal.ID != "agent" {
+		t.Fatalf("matching azp principal = %#v, error = %v", principal, err)
+	}
+
+	// Resource access tokens identify the calling client in azp while aud names
+	// this API. Their azp is authorization input, not an ID-token recipient.
+	authenticator.validateAuthorizedParty = false
+	if principal, err := authenticator.Authenticate(context.Background(), sign(jwt.Audience{audience}, "calling-agent-client")); err != nil || principal.ID != "agent" {
+		t.Fatalf("resource access-token principal = %#v, error = %v", principal, err)
 	}
 }
 
@@ -201,6 +294,42 @@ func TestRemoteKeySetThrottlesUnknownKeysAndClassifiesOutage(t *testing.T) {
 	}
 }
 
+func TestOIDCClientRejectsHTTPSDowngradeRedirect(t *testing.T) {
+	var plaintextRequests atomic.Int32
+	plaintext := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plaintextRequests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer plaintext.Close()
+
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, plaintext.URL, http.StatusTemporaryRedirect)
+	}))
+	defer tlsServer.Close()
+
+	client, transport := newOIDCClient()
+	transport.base = tlsServer.Client().Transport
+	request, err := http.NewRequest(
+		http.MethodPost,
+		tlsServer.URL,
+		strings.NewReader("code=authorization-code&client_secret=client-secret"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("OIDC client followed HTTPS-to-HTTP redirect")
+	}
+	if got := plaintextRequests.Load(); got != 0 {
+		t.Fatalf("plaintext redirect received %d requests", got)
+	}
+}
+
 func TestTokenVerifierDistinguishesInvalidCredentialsFromStorageOutages(t *testing.T) {
 	secret := APIKeyPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	for name, tc := range map[string]struct {
@@ -226,17 +355,21 @@ func TestTokenVerifierDistinguishesInvalidCredentialsFromStorageOutages(t *testi
 }
 
 type fakeLookup struct {
-	principal memory.Principal
-	digest    []byte
-	issuer    string
-	subject   string
-	expiry    time.Time
-	apiKeyErr error
+	principal   memory.Principal
+	digest      []byte
+	issuer      string
+	subject     string
+	expiry      time.Time
+	apiKeyErr   error
+	externalErr error
 }
 
 func (f *fakeLookup) ByExternalIdentity(_ context.Context, issuer, subject string) (memory.Principal, error) {
 	f.issuer = issuer
 	f.subject = subject
+	if f.externalErr != nil {
+		return memory.Principal{}, f.externalErr
+	}
 	return f.principal, nil
 }
 

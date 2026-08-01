@@ -38,6 +38,28 @@ func TestLimiterIsScopedPerPrincipalAndReturnsRetryGuidance(t *testing.T) {
 	}
 }
 
+func TestLimiterBoundsUnauthenticatedRequestsGlobally(t *testing.T) {
+	metrics := &Metrics{}
+	limiter := NewLimiter(60, 1, metrics)
+	requests := 0
+	handler := limiter.UnauthenticatedMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/console/auth/token", nil))
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/console/auth/token", nil))
+
+	if first.Code != http.StatusNoContent || second.Code != http.StatusTooManyRequests {
+		t.Fatalf("statuses = %d, %d", first.Code, second.Code)
+	}
+	if requests != 1 || second.Header().Get("Retry-After") == "" {
+		t.Fatalf("downstream requests = %d, retry-after = %q", requests, second.Header().Get("Retry-After"))
+	}
+}
+
 func TestMetricsExposeOperationDurationHistogram(t *testing.T) {
 	metrics := &Metrics{}
 	metrics.Observe("recall", 100*time.Millisecond, nil)

@@ -110,40 +110,12 @@ func main() {
 		slog.Error("configure console authentication", "error", err)
 		os.Exit(2)
 	}
-	consoleOIDCIssuer := os.Getenv("CONSOLE_OIDC_ISSUER")
-	consoleOIDCClientID := os.Getenv("CONSOLE_OIDC_CLIENT_ID")
-	if consoleOIDCIssuer != "" || consoleOIDCClientID != "" {
-		if consoleOIDCIssuer == "" || consoleOIDCClientID == "" {
-			slog.Error("CONSOLE_OIDC_ISSUER and CONSOLE_OIDC_CLIENT_ID must be set together")
-			os.Exit(2)
-		}
-		redirectURL := os.Getenv("CONSOLE_OIDC_REDIRECT_URL")
-		expectedRedirectURL := ""
-		if consolePublicOrigin != "" {
-			expectedRedirectURL = strings.TrimSuffix(consolePublicOrigin, "/") + "/console/auth/oidc/callback"
-		}
-		if redirectURL == "" {
-			redirectURL = expectedRedirectURL
-		}
-		if expectedRedirectURL != "" && redirectURL != expectedRedirectURL {
-			slog.Error("CONSOLE_OIDC_REDIRECT_URL must match CONSOLE_PUBLIC_ORIGIN callback")
-			os.Exit(2)
-		}
-		consoleOIDC, err := authn.NewBrowserOIDC(
-			ctx,
-			consoleOIDCIssuer,
-			consoleOIDCClientID,
-			os.Getenv("CONSOLE_OIDC_CLIENT_SECRET"),
-			redirectURL,
-			strings.Fields(os.Getenv("CONSOLE_OIDC_SCOPES")),
-			env("CONSOLE_OIDC_SUBJECT_CLAIM", "sub"),
-			os.Getenv("CONSOLE_OIDC_REQUIRED_ROLE"),
-			store,
-		)
-		if err != nil {
-			slog.Error("configure console OIDC", "error", err)
-			os.Exit(1)
-		}
+	consoleOIDC, err := newConsoleBrowserOIDC(ctx, consolePublicOrigin, store)
+	if err != nil {
+		slog.Error("configure console OIDC", "error", err)
+		os.Exit(2)
+	}
+	if consoleOIDC != nil {
 		consoleSessions.WithOIDC(consoleOIDC)
 	}
 	metrics := &httpx.Metrics{}
@@ -158,7 +130,15 @@ func main() {
 	mcpMemoryServer := mcpserver.New(domain, metrics).WithStartupApprovals(startupApprovals)
 	mcpHandler := mcpMemoryServer.Handler()
 	limiter := httpx.NewLimiter(envInt("RATE_LIMIT_PER_MINUTE", 120), envInt("RATE_LIMIT_BURST", 20), metrics)
-	protect := func(next http.Handler) http.Handler { return consoleSessions.Middleware(limiter.Middleware(next)) }
+	consoleAuthLimiter := httpx.NewLimiter(
+		envInt("CONSOLE_AUTH_RATE_LIMIT_PER_MINUTE", 30),
+		envInt("CONSOLE_AUTH_RATE_LIMIT_BURST", 10),
+		metrics,
+	)
+	consoleSessions.WithLoginAdmission(consoleAuthLimiter.AdmitUnauthenticated)
+	protect := func(next http.Handler) http.Handler {
+		return protectConsoleAPI(consoleSessions, authenticator, limiter, next)
+	}
 	mux := http.NewServeMux()
 	mcpResourceURI := env("MCP_RESOURCE_URI", "http://127.0.0.1:8080/mcp")
 	mcpResourceMetadataURL := env(
@@ -177,15 +157,7 @@ func main() {
 	consoleHandler := console.Handler(domain, protect)
 	mux.Handle("/console/", consoleHandler)
 	mux.Handle("/api/v1/", consoleHandler)
-	mux.HandleFunc("POST /console/auth/token", consoleSessions.LoginHandler)
-	mux.Handle("GET /console/auth/session", consoleSessions.Middleware(http.HandlerFunc(consoleSessions.SessionHandler)))
-	mux.HandleFunc("GET /console/auth/config", consoleSessions.AuthConfigHandler)
-	mux.Handle(
-		"GET /console/auth/oidc/start",
-		limiter.Middleware(http.HandlerFunc(consoleSessions.OIDCStartHandler)),
-	)
-	mux.HandleFunc("GET /console/auth/oidc/callback", consoleSessions.OIDCCallbackHandler)
-	mux.HandleFunc("POST /console/auth/logout", consoleSessions.LogoutHandler)
+	registerConsoleAuthRoutes(mux, consoleSessions)
 	mux.HandleFunc("GET /console", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
 	})
@@ -261,6 +233,93 @@ func main() {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func protectConsoleAPI(
+	sessions *authn.BrowserSessions,
+	authenticator *authn.Authenticator,
+	limiter *httpx.Limiter,
+	next http.Handler,
+) http.Handler {
+	limited := limiter.Middleware(next)
+	browser := sessions.Middleware(limited)
+	bearer := authenticator.Middleware(limited)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			bearer.ServeHTTP(w, r)
+			return
+		}
+		browser.ServeHTTP(w, r)
+	})
+}
+
+func newConsoleBrowserOIDC(
+	ctx context.Context,
+	publicOrigin string,
+	lookup authn.PrincipalLookup,
+) (*authn.BrowserOIDC, error) {
+	issuer := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_ISSUER"))
+	clientID := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_CLIENT_ID"))
+	if issuer == "" && clientID == "" {
+		return nil, nil
+	}
+	if issuer == "" || clientID == "" {
+		return nil, errors.New("CONSOLE_OIDC_ISSUER and CONSOLE_OIDC_CLIENT_ID must be set together")
+	}
+	publicOrigin = strings.TrimSuffix(strings.TrimSpace(publicOrigin), "/")
+	if publicOrigin == "" {
+		return nil, errors.New("CONSOLE_PUBLIC_ORIGIN is required for browser OIDC")
+	}
+	expectedRedirectURL := publicOrigin + "/console/auth/oidc/callback"
+	redirectURL := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_REDIRECT_URL"))
+	if redirectURL == "" {
+		redirectURL = expectedRedirectURL
+	} else if redirectURL != expectedRedirectURL {
+		return nil, errors.New("CONSOLE_OIDC_REDIRECT_URL must match CONSOLE_PUBLIC_ORIGIN callback")
+	}
+	clientSecret, err := loadOptionalSecret("CONSOLE_OIDC_CLIENT_SECRET", "CONSOLE_OIDC_CLIENT_SECRET_FILE")
+	if err != nil {
+		return nil, err
+	}
+	return authn.NewBrowserOIDC(
+		ctx,
+		issuer,
+		clientID,
+		clientSecret,
+		redirectURL,
+		strings.Fields(os.Getenv("CONSOLE_OIDC_SCOPES")),
+		env("CONSOLE_OIDC_SUBJECT_CLAIM", "sub"),
+		os.Getenv("CONSOLE_OIDC_REQUIRED_ROLE"),
+		lookup,
+	)
+}
+
+func loadOptionalSecret(valueEnv, fileEnv string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(valueEnv))
+	path := strings.TrimSpace(os.Getenv(fileEnv))
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s are mutually exclusive", valueEnv, fileEnv)
+	}
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(string(raw))
+	}
+	if len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("%s must be at most 4096 bytes without newlines", valueEnv)
+	}
+	return value, nil
+}
+
+func registerConsoleAuthRoutes(mux *http.ServeMux, sessions *authn.BrowserSessions) {
+	mux.HandleFunc("POST /console/auth/token", sessions.LoginHandler)
+	mux.Handle("GET /console/auth/session", sessions.Middleware(http.HandlerFunc(sessions.SessionHandler)))
+	mux.HandleFunc("GET /console/auth/config", sessions.AuthConfigHandler)
+	mux.HandleFunc("GET /console/auth/oidc/start", sessions.OIDCStartHandler)
+	mux.HandleFunc("GET /console/auth/oidc/callback", sessions.OIDCCallbackHandler)
+	mux.HandleFunc("POST /console/auth/logout", sessions.LogoutHandler)
 }
 
 func registerMCPRoutes(

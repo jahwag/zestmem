@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -29,12 +30,14 @@ type expiringAPIKeyLookup interface {
 }
 
 type Authenticator struct {
-	issuer       string
-	subjectClaim string
-	requiredRole string
-	verifier     *oidc.IDTokenVerifier
-	lookup       PrincipalLookup
-	transport    *cooldownTransport
+	issuer                  string
+	audience                string
+	subjectClaim            string
+	requiredRole            string
+	validateAuthorizedParty bool
+	verifier                *oidc.IDTokenVerifier
+	lookup                  PrincipalLookup
+	transport               *cooldownTransport
 }
 
 func New(ctx context.Context, issuer, audience string, lookup PrincipalLookup) (*Authenticator, error) {
@@ -53,6 +56,7 @@ func NewWithOptions(ctx context.Context, issuer, audience, subjectClaim, require
 	}
 	return &Authenticator{
 		issuer:       issuer,
+		audience:     audience,
 		subjectClaim: subjectClaim,
 		requiredRole: requiredRole,
 		verifier:     provider.Verifier(&oidc.Config{ClientID: audience}),
@@ -70,6 +74,7 @@ func NewWithRemoteKeySet(ctx context.Context, issuer, audience, jwksURL, subject
 	keySet := oidc.NewRemoteKeySet(ctx, jwksURL)
 	return &Authenticator{
 		issuer:       issuer,
+		audience:     audience,
 		subjectClaim: subjectClaim,
 		requiredRole: requiredRole,
 		verifier:     oidc.NewVerifier(issuer, keySet, &oidc.Config{ClientID: audience}),
@@ -88,10 +93,12 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (memory.
 }
 
 type credential struct {
-	principal    memory.Principal
-	expiry       time.Time
-	scopes       []string
-	apiKeyDigest []byte
+	principal       memory.Principal
+	expiry          time.Time
+	scopes          []string
+	apiKeyDigest    []byte
+	externalIssuer  string
+	externalSubject string
 }
 
 func (a *Authenticator) authenticate(ctx context.Context, token string) (credential, error) {
@@ -123,32 +130,92 @@ func (a *Authenticator) authenticateWithNonce(ctx context.Context, token, expect
 			}
 			return credential{}, ErrUnauthenticated
 		}
-		var claims struct {
-			OID   string   `json:"oid"`
-			Scope string   `json:"scp"`
-			Roles []string `json:"roles"`
-			Nonce string   `json:"nonce"`
-		}
+		var claims map[string]json.RawMessage
 		if err := idToken.Claims(&claims); err != nil {
 			return credential{}, ErrUnauthenticated
 		}
 		subject := idToken.Subject
 		if a.subjectClaim == "oid" {
-			subject = claims.OID
+			var ok bool
+			subject, ok = oidcStringClaim(claims, "oid")
+			if !ok {
+				return credential{}, ErrUnauthenticated
+			}
+		}
+		authorizedParty := ""
+		if a.validateAuthorizedParty {
+			var ok bool
+			authorizedParty, ok = oidcStringClaim(claims, "azp")
+			if !ok {
+				return credential{}, ErrUnauthenticated
+			}
+		}
+		roles := []string(nil)
+		if a.requiredRole != "" {
+			var ok bool
+			roles, ok = oidcStringSliceClaim(claims, "roles")
+			if !ok {
+				return credential{}, ErrUnauthenticated
+			}
+		}
+		nonce := ""
+		if expectedNonce != "" {
+			var ok bool
+			nonce, ok = oidcStringClaim(claims, "nonce")
+			if !ok {
+				return credential{}, ErrUnauthenticated
+			}
 		}
 		if subject == "" ||
-			(a.requiredRole != "" && !contains(claims.Roles, a.requiredRole)) ||
-			(expectedNonce != "" && !constantTimeEqual(claims.Nonce, expectedNonce)) {
+			(a.validateAuthorizedParty && authorizedParty != "" && authorizedParty != a.audience) ||
+			(a.validateAuthorizedParty && len(idToken.Audience) > 1 && authorizedParty == "") ||
+			(a.requiredRole != "" && !contains(roles, a.requiredRole)) ||
+			(expectedNonce != "" && !constantTimeEqual(nonce, expectedNonce)) {
 			return credential{}, ErrUnauthenticated
 		}
 		principal, err := a.lookup.ByExternalIdentity(ctx, a.issuer, subject)
 		if err != nil {
 			return credential{}, err
 		}
-		scopes := append(strings.Fields(claims.Scope), claims.Roles...)
-		return credential{principal: principal, expiry: idToken.Expiry, scopes: scopes}, nil
+		scopes := []string(nil)
+		for _, claim := range []string{"scope", "scp"} {
+			if value, ok := oidcStringClaim(claims, claim); ok {
+				scopes = append(scopes, strings.Fields(value)...)
+			}
+		}
+		return credential{
+			principal:       principal,
+			expiry:          idToken.Expiry,
+			scopes:          scopes,
+			externalIssuer:  a.issuer,
+			externalSubject: subject,
+		}, nil
 	}
 	return credential{}, ErrUnauthenticated
+}
+
+func oidcStringClaim(claims map[string]json.RawMessage, name string) (string, bool) {
+	raw, exists := claims[name]
+	if !exists {
+		return "", true
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func oidcStringSliceClaim(claims map[string]json.RawMessage, name string) ([]string, bool) {
+	raw, exists := claims[name]
+	if !exists {
+		return nil, true
+	}
+	var value []string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, false
+	}
+	return value, true
 }
 
 func (a *Authenticator) authenticateAPIKeyDigest(ctx context.Context, digest []byte) (credential, error) {
@@ -224,6 +291,14 @@ func WithPrincipal(ctx context.Context, principal memory.Principal) context.Cont
 
 func PrincipalFromContext(ctx context.Context) (memory.Principal, bool) {
 	principal, ok := ctx.Value(contextKey{}).(memory.Principal)
+	if ok {
+		return principal, true
+	}
+	tokenInfo := auth.TokenInfoFromContext(ctx)
+	if tokenInfo == nil || tokenInfo.Extra == nil {
+		return memory.Principal{}, false
+	}
+	principal, ok = tokenInfo.Extra["principal"].(memory.Principal)
 	return principal, ok
 }
 
