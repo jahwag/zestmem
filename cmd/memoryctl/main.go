@@ -11,10 +11,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/buildinfo"
-	"github.com/bytelope/zestmem/internal/memory"
 	"github.com/jackc/pgx/v5"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/buildinfo"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 func main() {

@@ -1,18 +1,23 @@
 # Contributing
 
-ZestMem is currently private and all contributions require authorization from
-Bytelope. Install Go 1.25, Podman (the local default) or Docker, and GNU Make.
+Contributions to ZestMem are welcome.
 
-Run `make verify`, `make integration`, `make backup`, `make load`, and
-`make release-snapshot` before requesting review. Keep migrations append-only
-and update operational documentation with behavior changes.
+Development requires Go 1.25, Docker, and Node.js 22. Before opening a pull
+request, run:
 
-Open a focused pull request. Its title must use Conventional Commits, for
-example `feat(mcp): add bounded search filters`. Allowed types are `feat`,
-`fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`, and
-`revert`. The repository uses squash merges; the title becomes the commit on
-`main` and drives Release Please.
+```sh
+go test ./...
+go vet ./...
+make integration
+make release-snapshot
+```
 
-By contributing, you agree that Bytelope may use the contribution under the
-repository's proprietary license. Do not submit third-party material without
-documented permission.
+Open an issue before starting a substantial change so the approach can be
+discussed. Keep pull requests focused, use conventional commit titles such as
+`fix: ...`, `feat: ...`, `docs: ...`, `build: ...`, or `ci: ...`, and do not
+commit credentials or generated local state.
+
+Pull requests target `main` and must pass the repository's required checks.
+
+By submitting a contribution, you agree that it may be distributed under the
+repository's MIT License.

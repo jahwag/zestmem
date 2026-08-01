@@ -1,8 +1,9 @@
 const {test, expect} = require('@playwright/test');
+const readerKey = 'am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 test('mobile Space drawer and detail navigation remain usable', async ({page}) => {
   await page.goto('/console/');
-  await page.getByLabel('Bearer credential').fill('zm_test_reader');
+  await page.getByLabel('Bearer credential').fill(readerKey);
   await page.getByRole('button', {name: 'Open memory browser'}).click();
   await expect(page.getByRole('heading', {name: 'Memories', exact: true})).toBeVisible();
 

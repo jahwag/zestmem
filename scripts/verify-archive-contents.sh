@@ -46,8 +46,8 @@ verify() {
 	}
 }
 
-unix_members="$(printf '%s\n' LICENSE.md README.md memory-mcp-bridge memoryctl memoryd usewhen-backfill | LC_ALL=C sort)"
-windows_members="$(printf '%s\n' LICENSE.md README.md memory-mcp-bridge.exe memoryctl.exe memoryd.exe | LC_ALL=C sort)"
+unix_members="$(printf '%s\n' LICENSE README.md memory-mcp-bridge memoryctl memoryd usewhen-backfill | LC_ALL=C sort)"
+windows_members="$(printf '%s\n' LICENSE README.md memory-mcp-bridge.exe memoryctl.exe memoryd.exe | LC_ALL=C sort)"
 
 verify 'zestmem_*_linux_amd64.tar.gz' "$unix_members"
 verify 'zestmem_*_linux_arm64.tar.gz' "$unix_members"

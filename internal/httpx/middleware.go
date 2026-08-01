@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
 	"github.com/google/uuid"
+	"github.com/jahwag/zestmem/internal/authn"
 )
 
 type Metrics struct {
@@ -139,27 +139,55 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "unauthenticated", 401)
 			return
 		}
-		now := time.Now()
-		l.mu.Lock()
-		b := l.buckets[p.ID]
-		if b.updated.IsZero() {
-			b.tokens = l.burst
-			b.updated = now
-		}
-		b.tokens = min(l.burst, b.tokens+now.Sub(b.updated).Seconds()*l.rate)
-		b.updated = now
-		allowed := b.tokens >= 1
-		if allowed {
-			b.tokens--
-		}
-		l.buckets[p.ID] = b
-		l.mu.Unlock()
-		if !allowed {
-			l.metrics.Limited.Add(1)
-			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(1/l.rate))))
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
+		l.serve("principal:"+p.ID, next, w, r)
 	})
+}
+
+// UnauthenticatedMiddleware applies one process-wide backstop bucket. A
+// trusted edge should add per-client limits; this bound prevents failed login
+// attempts from causing unbounded downstream work when no edge is present.
+func (l *Limiter) UnauthenticatedMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l.serve("unauthenticated", next, w, r)
+	})
+}
+
+// AdmitUnauthenticated consumes from the process-wide unauthenticated bucket.
+// Callers can invoke it after cheap syntax and origin checks but before doing
+// database or identity-provider work.
+func (l *Limiter) AdmitUnauthenticated() (time.Duration, bool) {
+	return l.admit("unauthenticated")
+}
+
+func (l *Limiter) serve(key string, next http.Handler, w http.ResponseWriter, r *http.Request) {
+	retryAfter, allowed := l.admit(key)
+	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()))))
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	next.ServeHTTP(w, r)
+}
+
+func (l *Limiter) admit(key string) (time.Duration, bool) {
+	now := time.Now()
+	l.mu.Lock()
+	b := l.buckets[key]
+	if b.updated.IsZero() {
+		b.tokens = l.burst
+		b.updated = now
+	}
+	b.tokens = min(l.burst, b.tokens+now.Sub(b.updated).Seconds()*l.rate)
+	b.updated = now
+	allowed := b.tokens >= 1
+	if allowed {
+		b.tokens--
+	}
+	l.buckets[key] = b
+	l.mu.Unlock()
+	if allowed {
+		return 0, true
+	}
+	l.metrics.Limited.Add(1)
+	return time.Duration(max(1, int(1/l.rate))) * time.Second, false
 }

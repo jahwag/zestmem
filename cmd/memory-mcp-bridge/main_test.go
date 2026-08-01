@@ -10,12 +10,74 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/startup"
+	"github.com/jahwag/zestmem/internal/startup"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type startupContextInput struct {
 	PreferredSpaceID string `json:"preferred_space_id,omitempty"`
+}
+
+func TestValidateEndpointRequiresHTTPSOrLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		ok       bool
+	}{
+		{"https://memory.example.com/mcp", true},
+		{"http://127.0.0.1:14501/mcp", true},
+		{"http://[::1]:14501/mcp", true},
+		{"http://localhost:14501/mcp", true},
+		{"http://memory.example.com/mcp", false},
+		{"https://user:secret@memory.example.com/mcp", false},
+		{"https://memory.example.com/mcp?token=secret", false},
+		{"https://memory.example.com/mcp#fragment", false},
+		{"", false},
+	} {
+		err := validateEndpoint(tc.endpoint)
+		if tc.ok && err != nil {
+			t.Errorf("validateEndpoint(%q) = %v", tc.endpoint, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("validateEndpoint(%q) unexpectedly succeeded", tc.endpoint)
+		}
+	}
+}
+
+func TestAuthenticatedClientRejectsRedirectWithoutForwardingToken(t *testing.T) {
+	t.Setenv("MEMORY_TOKEN", "native-memory-token")
+	t.Setenv("MEMORY_SCOPE", "")
+	t.Setenv("MEMORY_AUDIENCE", "")
+	targetHit := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.RedirectHandler(target.URL, http.StatusTemporaryRedirect))
+	defer redirect.Close()
+
+	client, err := authenticatedClient(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(redirect.URL); err == nil {
+		t.Fatal("authenticated client followed redirect")
+	}
+	select {
+	case authorization := <-targetHit:
+		t.Fatalf("redirect target received Authorization %q", authorization)
+	default:
+	}
+}
+
+func TestEntraClientRequiresPinnedCredentialChain(t *testing.T) {
+	t.Setenv("MEMORY_TOKEN", "")
+	t.Setenv("MEMORY_SCOPE", "api://memory/.default")
+	t.Setenv("MEMORY_AUDIENCE", "")
+	t.Setenv("AZURE_TOKEN_CREDENTIALS", "")
+	if _, err := authenticatedClient(context.Background()); err == nil {
+		t.Fatal("missing AZURE_TOKEN_CREDENTIALS did not fail closed")
+	}
 }
 
 func TestWriteStartupContext(t *testing.T) {

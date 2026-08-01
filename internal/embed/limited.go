@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 var ErrBusy = errors.New("embedding queue full; retry later")

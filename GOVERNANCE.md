@@ -1,10 +1,13 @@
 # Governance
 
-Bytelope owns ZestMem and appoints its maintainers. Maintainers decide product
-direction, architecture, access, licensing, and whether a contribution is
-accepted. Routine decisions happen in pull requests; significant or hard-to-
-reverse decisions should be recorded in repository documentation.
+ZestMem is maintained by Jahziah Wagner and project maintainers appointed by
+him. Maintainers decide product direction, architecture, releases, and whether
+contributions are accepted.
 
-Maintainers cut releases only through Release Please and the protected release
-workflow. The repository owner may use an emergency ruleset bypass to repair a
-broken release or critical vulnerability and must document the action afterward.
+Decisions may evolve as the project and its community grow. Material changes
+should be recorded in repository documentation, issues, or pull requests so
+they remain reviewable.
+
+Maintainers may merge, close, revert, or decline changes through the normal
+GitHub workflow. Security or operational emergencies may be handled privately
+until disclosure is safe.

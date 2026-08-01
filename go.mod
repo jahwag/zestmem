@@ -1,4 +1,4 @@
-module github.com/bytelope/zestmem
+module github.com/jahwag/zestmem
 
 go 1.25.0
 
@@ -9,7 +9,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pgvector/pgvector-go v0.4.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.40.0
@@ -32,4 +32,5 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )

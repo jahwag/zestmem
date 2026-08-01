@@ -16,7 +16,7 @@
     <div class="connection" id="connection" hidden>
       <span><i aria-hidden="true"></i> Read only</span>
       <button id="logout" class="quiet-button" type="button" aria-describedby="lock-action-help">Lock</button>
-      <span id="lock-action-help" class="sr-only">Removes this browser copy and displayed memory data; does not revoke the API key.</span>
+      <span id="lock-action-help" class="sr-only">Revokes this browser session and clears displayed memory data; does not revoke the API key.</span>
     </div>
   </header>
 
@@ -24,19 +24,17 @@
     <section id="login" class="login panel" aria-labelledby="login-title">
       <p class="eyebrow">Durable agent memory</p>
       <h1 id="login-title">Browse what your agents remember.</h1>
-      <p class="lede">Connect with a dedicated Reader API key or short-lived access token. By default the credential stays only in page memory.</p>
+      <p class="lede">Connect with a dedicated Reader API key or your configured identity provider. The credential is exchanged for a secure browser session and is never stored by JavaScript.</p>
+      <a id="oidc-login" class="primary-button oidc-login" href="/console/auth/oidc/start" hidden>Sign in with identity provider</a>
+      <p id="login-divider" class="login-divider" hidden><span>or use a Reader API key</span></p>
       <form id="login-form">
         <label for="token">Bearer credential</label>
         <div class="login-control">
           <input id="token" type="password" autocomplete="off" spellcheck="false" required autofocus>
           <button type="submit" class="primary-button">Open memory browser</button>
         </div>
-        <label class="session-choice" for="keep-session">
-          <input id="keep-session" type="checkbox">
-          <span><strong>Keep this tab unlocked after refresh</strong><small>Store this browser copy in the tab's session storage so refresh can reconnect.</small></span>
-        </label>
       </form>
-      <p id="lock-explanation" class="muted">Lock removes this browser copy; it does not revoke the API key. Browser session restore or a duplicated tab may retain session storage until you Lock.</p>
+      <p id="lock-explanation" class="muted">Lock revokes this browser session; it does not revoke the underlying API key.</p>
       <p id="login-error" class="error" role="alert"></p>
     </section>
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 func TestRenderPublishesOnlyExactApprovedCueAndInvalidatesEdits(t *testing.T) {

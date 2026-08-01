@@ -5,24 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/buildinfo"
-	"github.com/bytelope/zestmem/internal/console"
-	"github.com/bytelope/zestmem/internal/embed"
-	"github.com/bytelope/zestmem/internal/httpx"
-	"github.com/bytelope/zestmem/internal/mcpserver"
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/internal/postgres"
-	"github.com/bytelope/zestmem/internal/startup"
 	"github.com/google/uuid"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/buildinfo"
+	"github.com/jahwag/zestmem/internal/console"
+	"github.com/jahwag/zestmem/internal/embed"
+	"github.com/jahwag/zestmem/internal/httpx"
+	"github.com/jahwag/zestmem/internal/mcpserver"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/postgres"
+	"github.com/jahwag/zestmem/internal/startup"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 func main() {
@@ -58,13 +62,73 @@ func main() {
 			slog.Error("OIDC_ISSUER and OIDC_AUDIENCE must be set together")
 			os.Exit(1)
 		}
-		authenticator, err = authn.New(ctx, issuer, audience, store)
+		authenticator, err = authn.NewWithOptions(
+			ctx,
+			issuer,
+			audience,
+			env("OIDC_SUBJECT_CLAIM", "sub"),
+			os.Getenv("OIDC_REQUIRED_ROLE"),
+			store,
+		)
 		if err != nil {
 			slog.Error("OIDC discovery", "error", err)
 			os.Exit(1)
 		}
 	} else {
 		authenticator = authn.NewAPIKeyOnly(store)
+	}
+	var consoleAssertion *authn.Authenticator
+	assertionIssuer := os.Getenv("CONSOLE_ASSERTION_ISSUER")
+	assertionAudience := os.Getenv("CONSOLE_ASSERTION_AUDIENCE")
+	assertionJWKSURL := os.Getenv("CONSOLE_ASSERTION_JWKS_URL")
+	if err := validateConsoleAuthoritySeparation(
+		issuer,
+		audience,
+		assertionIssuer,
+		assertionAudience,
+		os.Getenv("CONSOLE_OIDC_ISSUER"),
+		os.Getenv("CONSOLE_OIDC_CLIENT_ID"),
+	); err != nil {
+		slog.Error("configure console authority separation", "error", err)
+		os.Exit(2)
+	}
+	if assertionIssuer != "" || assertionAudience != "" || assertionJWKSURL != "" {
+		if assertionIssuer == "" || assertionAudience == "" || assertionJWKSURL == "" {
+			slog.Error("CONSOLE_ASSERTION_ISSUER, CONSOLE_ASSERTION_AUDIENCE, and CONSOLE_ASSERTION_JWKS_URL must be set together")
+			os.Exit(2)
+		}
+		consoleAssertion, err = authn.NewWithRemoteKeySet(
+			ctx,
+			assertionIssuer,
+			assertionAudience,
+			assertionJWKSURL,
+			env("CONSOLE_ASSERTION_SUBJECT_CLAIM", "sub"),
+			os.Getenv("CONSOLE_ASSERTION_REQUIRED_ROLE"),
+			store,
+		)
+		if err != nil {
+			slog.Error("configure console assertion authentication", "error", err)
+			os.Exit(2)
+		}
+	}
+	consolePublicOrigin := os.Getenv("CONSOLE_PUBLIC_ORIGIN")
+	consoleSessions, err := authn.NewBrowserSessions(
+		authenticator,
+		consoleAssertion,
+		env("CONSOLE_ASSERTION_HEADER", "Cf-Access-Jwt-Assertion"),
+		consolePublicOrigin,
+	)
+	if err != nil {
+		slog.Error("configure console authentication", "error", err)
+		os.Exit(2)
+	}
+	consoleOIDC, err := newConsoleBrowserOIDC(ctx, consolePublicOrigin, store)
+	if err != nil {
+		slog.Error("configure console OIDC", "error", err)
+		os.Exit(2)
+	}
+	if consoleOIDC != nil {
+		consoleSessions.WithOIDC(consoleOIDC)
 	}
 	metrics := &httpx.Metrics{}
 	startupApprovals, err := startup.ParseApprovals(os.Getenv("ZESTMEM_STARTUP_CUE_APPROVALS"))
@@ -78,12 +142,34 @@ func main() {
 	mcpMemoryServer := mcpserver.New(domain, metrics).WithStartupApprovals(startupApprovals)
 	mcpHandler := mcpMemoryServer.Handler()
 	limiter := httpx.NewLimiter(envInt("RATE_LIMIT_PER_MINUTE", 120), envInt("RATE_LIMIT_BURST", 20), metrics)
-	protect := func(next http.Handler) http.Handler { return authenticator.Middleware(limiter.Middleware(next)) }
+	consoleAuthLimiter := httpx.NewLimiter(
+		envInt("CONSOLE_AUTH_RATE_LIMIT_PER_MINUTE", 30),
+		envInt("CONSOLE_AUTH_RATE_LIMIT_BURST", 10),
+		metrics,
+	)
+	consoleSessions.WithLoginAdmission(consoleAuthLimiter.AdmitUnauthenticated)
+	protect := func(next http.Handler) http.Handler {
+		return protectConsoleAPI(consoleSessions, authenticator, limiter, next)
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", authenticator.Middleware(limiter.Middleware(http.MaxBytesHandler(mcpHandler, 1<<20))))
+	mcpResourceURI := env("MCP_RESOURCE_URI", "http://127.0.0.1:8080/mcp")
+	mcpResourceMetadataURL := env(
+		"MCP_RESOURCE_METADATA_URL",
+		strings.TrimSuffix(mcpResourceURI, "/mcp")+"/.well-known/oauth-protected-resource/mcp",
+	)
+	registerMCPRoutes(
+		mux,
+		limiter.Middleware(http.MaxBytesHandler(mcpHandler, 1<<20)),
+		authenticator.TokenVerifier,
+		issuer,
+		mcpResourceURI,
+		mcpResourceMetadataURL,
+		strings.Fields(os.Getenv("OIDC_SCOPES")),
+	)
 	consoleHandler := console.Handler(domain, protect)
 	mux.Handle("/console/", consoleHandler)
 	mux.Handle("/api/v1/", consoleHandler)
+	registerConsoleAuthRoutes(mux, consoleSessions)
 	mux.HandleFunc("GET /console", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/console/", http.StatusTemporaryRedirect)
 	})
@@ -159,6 +245,157 @@ func main() {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func protectConsoleAPI(
+	sessions *authn.BrowserSessions,
+	authenticator *authn.Authenticator,
+	limiter *httpx.Limiter,
+	next http.Handler,
+) http.Handler {
+	limited := limiter.Middleware(next)
+	browser := sessions.Middleware(limited)
+	bearer := authenticator.Middleware(limited)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, value := range r.Header.Values("Authorization") {
+			if strings.TrimSpace(value) != "" {
+				bearer.ServeHTTP(w, r)
+				return
+			}
+		}
+		browser.ServeHTTP(w, r)
+	})
+}
+
+func validateConsoleAuthoritySeparation(
+	resourceIssuer string,
+	resourceAudience string,
+	assertionIssuer string,
+	assertionAudience string,
+	browserIssuer string,
+	browserClientID string,
+) error {
+	resourceIssuer = strings.TrimSpace(resourceIssuer)
+	resourceAudience = strings.TrimSpace(resourceAudience)
+	if resourceIssuer == "" || resourceAudience == "" {
+		return nil
+	}
+	if resourceIssuer == strings.TrimSpace(assertionIssuer) &&
+		resourceAudience == strings.TrimSpace(assertionAudience) {
+		return errors.New("console assertion issuer and audience must differ from the MCP OIDC authority")
+	}
+	if resourceIssuer == strings.TrimSpace(browserIssuer) &&
+		resourceAudience == strings.TrimSpace(browserClientID) {
+		return errors.New("console OIDC issuer and client ID must differ from the MCP OIDC authority")
+	}
+	return nil
+}
+
+func newConsoleBrowserOIDC(
+	ctx context.Context,
+	publicOrigin string,
+	lookup authn.PrincipalLookup,
+) (*authn.BrowserOIDC, error) {
+	issuer := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_ISSUER"))
+	clientID := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_CLIENT_ID"))
+	if issuer == "" && clientID == "" {
+		return nil, nil
+	}
+	if issuer == "" || clientID == "" {
+		return nil, errors.New("CONSOLE_OIDC_ISSUER and CONSOLE_OIDC_CLIENT_ID must be set together")
+	}
+	publicOrigin = strings.TrimSuffix(strings.TrimSpace(publicOrigin), "/")
+	if publicOrigin == "" {
+		return nil, errors.New("CONSOLE_PUBLIC_ORIGIN is required for browser OIDC")
+	}
+	expectedRedirectURL := publicOrigin + "/console/auth/oidc/callback"
+	redirectURL := strings.TrimSpace(os.Getenv("CONSOLE_OIDC_REDIRECT_URL"))
+	if redirectURL == "" {
+		redirectURL = expectedRedirectURL
+	} else if redirectURL != expectedRedirectURL {
+		return nil, errors.New("CONSOLE_OIDC_REDIRECT_URL must match CONSOLE_PUBLIC_ORIGIN callback")
+	}
+	clientSecret, err := loadOptionalSecret("CONSOLE_OIDC_CLIENT_SECRET", "CONSOLE_OIDC_CLIENT_SECRET_FILE")
+	if err != nil {
+		return nil, err
+	}
+	return authn.NewBrowserOIDC(
+		ctx,
+		issuer,
+		clientID,
+		clientSecret,
+		redirectURL,
+		strings.Fields(os.Getenv("CONSOLE_OIDC_SCOPES")),
+		env("CONSOLE_OIDC_SUBJECT_CLAIM", "sub"),
+		os.Getenv("CONSOLE_OIDC_REQUIRED_ROLE"),
+		lookup,
+	)
+}
+
+func loadOptionalSecret(valueEnv, fileEnv string) (string, error) {
+	const (
+		maxSecretBytes     = 4096
+		maxSecretFileBytes = maxSecretBytes + 2 // Permit one trailing CRLF.
+	)
+
+	value := strings.TrimSpace(os.Getenv(valueEnv))
+	path := strings.TrimSpace(os.Getenv(fileEnv))
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s are mutually exclusive", valueEnv, fileEnv)
+	}
+	if path != "" {
+		file, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer file.Close()
+		raw, err := io.ReadAll(io.LimitReader(file, maxSecretFileBytes+1))
+		if err != nil {
+			return "", err
+		}
+		if len(raw) > maxSecretFileBytes {
+			return "", fmt.Errorf("%s must contain at most %d secret bytes with an optional line ending", fileEnv, maxSecretBytes)
+		}
+		value = strings.TrimSpace(string(raw))
+	}
+	if len(value) > maxSecretBytes || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("%s must be at most %d bytes without newlines", valueEnv, maxSecretBytes)
+	}
+	return value, nil
+}
+
+func registerConsoleAuthRoutes(mux *http.ServeMux, sessions *authn.BrowserSessions) {
+	mux.HandleFunc("POST /console/auth/token", sessions.LoginHandler)
+	mux.Handle("GET /console/auth/session", sessions.Middleware(http.HandlerFunc(sessions.SessionHandler)))
+	mux.HandleFunc("GET /console/auth/config", sessions.AuthConfigHandler)
+	mux.HandleFunc("GET /console/auth/oidc/start", sessions.OIDCStartHandler)
+	mux.HandleFunc("GET /console/auth/oidc/callback", sessions.OIDCCallbackHandler)
+	mux.HandleFunc("POST /console/auth/logout", sessions.LogoutHandler)
+}
+
+func registerMCPRoutes(
+	mux *http.ServeMux,
+	handler http.Handler,
+	verifier auth.TokenVerifier,
+	issuer string,
+	resourceURI string,
+	resourceMetadataURL string,
+	scopes []string,
+) {
+	options := &auth.RequireBearerTokenOptions{AllowMissingExpiration: true}
+	if issuer != "" {
+		options.ResourceMetadataURL = resourceMetadataURL
+		metadata := &oauthex.ProtectedResourceMetadata{
+			Resource:             resourceURI,
+			AuthorizationServers: []string{issuer},
+			ScopesSupported:      scopes,
+		}
+		mux.Handle(
+			"GET /.well-known/oauth-protected-resource/mcp",
+			auth.ProtectedResourceMetadataHandler(metadata),
+		)
+	}
+	mux.Handle("/mcp", auth.RequireBearerToken(verifier, options)(handler))
 }
 
 func canonicalSpaceID(value string) (string, error) {

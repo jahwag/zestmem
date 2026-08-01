@@ -10,8 +10,7 @@ fmt-check:
 	@test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './dist/*'))"
 
 verify: fmt-check
-	go mod tidy
-	git diff --exit-code -- go.mod go.sum
+	go mod tidy -diff
 	go vet ./...
 	go test -race ./...
 

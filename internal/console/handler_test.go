@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/memory"
 )
 
 type fakeService struct {

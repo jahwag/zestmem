@@ -1,6 +1,8 @@
 # Support
 
-Use GitHub Issues for reproducible defects and feature proposals. Security
-reports belong in a private GitHub Security Advisory as described in
-`SECURITY.md`. Deployment design, data recovery, and operational consulting are
-outside community support and require a separate agreement with Bytelope.
+Use GitHub Issues for reproducible defects and feature proposals. For usage
+questions and community support, join the
+[Orchard Discord](https://discord.gg/pR4qeMH4u4).
+
+Security reports belong in a private GitHub Security Advisory as described in
+`SECURITY.md`.

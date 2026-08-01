@@ -27,7 +27,15 @@ OpenCode should use the portable instruction until a stable, version-pinned life
 
 Direct Streamable HTTP works with a fresh token. For long-running agent sessions, build `go build ./cmd/memory-mcp-bridge` and configure it as a local stdio MCP server. It forwards the remote server's live tool schemas and calls while Go's OAuth token source caches and reacquires short-lived Entra client-credentials tokens automatically.
 
-Set `MEMORY_MCP_URL` and either `MEMORY_AUDIENCE` or `MEMORY_SCOPE`. The bridge uses Azure's `DefaultAzureCredential`, so it supports environment-based service-principal secrets or certificates, workload-identity federation, managed identity, and local Azure developer credentials without changing the MCP client. Configure the standard `AZURE_*` variables appropriate to the selected credential. `MEMORY_TOKEN` selects the simpler opaque-key mode during migration.
+Set `MEMORY_MCP_URL` and either `MEMORY_AUDIENCE` or `MEMORY_SCOPE`. The bridge
+uses Azure's `DefaultAzureCredential`, so it supports environment-based
+service-principal secrets or certificates, workload-identity federation,
+managed identity, and explicitly selected local developer credentials without
+changing the MCP client. It requires `AZURE_TOKEN_CREDENTIALS`; use `prod` for
+an unattended service so a broken workload credential cannot fall through to
+a cached CLI/developer identity. Configure the remaining standard `AZURE_*`
+variables appropriate to the selected credential. `MEMORY_TOKEN` selects the
+simpler opaque-key mode during migration.
 
 For direct Codex remote MCP configuration:
 

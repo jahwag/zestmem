@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/internal/postgres"
 	"github.com/jackc/pgx/v5"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/postgres"
 )
 
 func TestTenAgentsTenThousandMemories(t *testing.T) {

@@ -22,4 +22,4 @@ done
 "$runtime" exec --interactive "$name" psql -v ON_ERROR_STOP=1 -U postgres -d memory < migrations/001_init.sql >/dev/null
 TEST_DATABASE_URL="postgres://postgres:test@localhost:${port}/memory?sslmode=disable" go test ./migrations -count=1
 TEST_DATABASE_URL="postgres://postgres:test@localhost:${port}/memory?sslmode=disable" go test ./internal/postgres -count=1
-TEST_DATABASE_URL="postgres://postgres:test@localhost:${port}/memory?sslmode=disable" go test ./internal/mcpserver -run TestStreamableHTTPListsAndCallsAllTools -count=1
+TEST_DATABASE_URL="postgres://postgres:test@localhost:${port}/memory?sslmode=disable" go test ./internal/mcpserver -count=1

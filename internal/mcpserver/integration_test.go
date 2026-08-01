@@ -11,17 +11,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bytelope/zestmem/internal/authn"
-	"github.com/bytelope/zestmem/internal/mcpserver"
-	"github.com/bytelope/zestmem/internal/memory"
-	"github.com/bytelope/zestmem/internal/postgres"
-	"github.com/bytelope/zestmem/internal/startup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jahwag/zestmem/internal/authn"
+	"github.com/jahwag/zestmem/internal/mcpserver"
+	"github.com/jahwag/zestmem/internal/memory"
+	"github.com/jahwag/zestmem/internal/postgres"
+	"github.com/jahwag/zestmem/internal/startup"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type bearerTransport struct{ token string }
+type bearerTransport struct {
+	token string
+	host  string
+}
 
 type fixedEmbedder struct{}
 
@@ -34,6 +38,9 @@ func (fixedEmbedder) Embed(context.Context, string) ([]float32, error) {
 func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	clone.Header.Set("Authorization", "Bearer "+t.token)
+	if t.host != "" {
+		clone.Host = t.host
+	}
 	return http.DefaultTransport.RoundTrip(clone)
 }
 
@@ -89,7 +96,14 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 		t.Fatalf("fallback-key lookup: %v", err)
 	}
 	domain := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
-	server := httptest.NewServer(authn.NewAPIKeyOnly(store).Middleware(mcpserver.New(domain).WithStartupApprovals(startup.Approvals{space: startup.CueHash(spaceCue)}).Handler()))
+	authenticator := authn.NewAPIKeyOnly(store)
+	handler := auth.RequireBearerToken(
+		authenticator.TokenVerifier,
+		&auth.RequireBearerTokenOptions{AllowMissingExpiration: true},
+	)(mcpserver.New(domain).WithStartupApprovals(
+		startup.Approvals{space: startup.CueHash(spaceCue)},
+	).Handler())
+	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := mcp.NewClient(&mcp.Implementation{Name: "integration-client", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL, HTTPClient: &http.Client{Transport: bearerTransport{token: secret}}, DisableStandaloneSSE: true}, nil)
@@ -313,5 +327,164 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if got := status(); got != http.StatusUnauthorized {
 		t.Fatalf("disabled principal status=%d", got)
+	}
+}
+
+func TestAuthenticatedMCPIsolatesPrincipalsAndSpaces(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(ctx, `TRUNCATE audit_events,idempotency_records,relations,memory_embeddings,memory_revisions,memories,workspace_bindings,space_grants,api_keys,spaces,principals CASCADE`)
+	if err != nil {
+		conn.Close(ctx)
+		t.Fatal(err)
+	}
+	ownerID := uuid.NewString()
+	aliceID := uuid.NewString()
+	bobID := uuid.NewString()
+	aliceSpaceID := uuid.NewString()
+	bobSpaceID := uuid.NewString()
+	aliceToken := "am_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	bobToken := "am_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	aliceDigest := sha256.Sum256([]byte(aliceToken))
+	bobDigest := sha256.Sum256([]byte(bobToken))
+	_, err = conn.Exec(ctx, `
+		INSERT INTO principals(id,type,display_name)
+		VALUES($1,'human','owner'),($2,'agent','alice'),($3,'agent','bob')`,
+		ownerID, aliceID, bobID)
+	if err == nil {
+		_, err = conn.Exec(ctx, `
+			INSERT INTO spaces(id,type,name,slug)
+			VALUES($1,'organization','Alice space','alice-space'),
+			      ($2,'organization','Bob space','bob-space')`,
+			aliceSpaceID, bobSpaceID)
+	}
+	if err == nil {
+		_, err = conn.Exec(ctx, `
+			INSERT INTO space_grants(principal_id,space_id,role,granted_by)
+			VALUES($1,$2,'contributor',$3),($4,$5,'contributor',$3)`,
+			aliceID, aliceSpaceID, ownerID, bobID, bobSpaceID)
+	}
+	if err == nil {
+		_, err = conn.Exec(ctx, `
+			INSERT INTO api_keys(principal_id,prefix,digest,created_by)
+			VALUES($1,'alice-key',$2,$3),($4,'bob-key',$5,$3)`,
+			aliceID, aliceDigest[:], ownerID, bobID, bobDigest[:])
+	}
+	conn.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := postgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	domain := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
+	authenticator := authn.NewAPIKeyOnly(store)
+	handler := auth.RequireBearerToken(
+		authenticator.TokenVerifier,
+		&auth.RequireBearerTokenOptions{AllowMissingExpiration: true},
+	)(mcpserver.New(domain).Handler())
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	connect := func(token string) *mcp.ClientSession {
+		t.Helper()
+		session, err := mcp.NewClient(
+			&mcp.Implementation{Name: "isolation-test", Version: "1"},
+			nil,
+		).Connect(
+			ctx,
+			&mcp.StreamableClientTransport{
+				Endpoint: server.URL,
+				HTTPClient: &http.Client{Transport: bearerTransport{
+					token: token,
+					host:  "zestmem.example.test",
+				}},
+				DisableStandaloneSSE: true,
+			},
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+	aliceSession := connect(aliceToken)
+	defer aliceSession.Close()
+	bobSession := connect(bobToken)
+	defer bobSession.Close()
+
+	assertCatalog := func(session *mcp.ClientSession, visibleID, hiddenID string) {
+		t.Helper()
+		result, err := session.CallTool(
+			ctx,
+			&mcp.CallToolParams{Name: "catalog", Arguments: map[string]any{}},
+		)
+		if err != nil || result.IsError {
+			t.Fatalf("catalog result=%#v error=%v", result, err)
+		}
+		text := result.Content[0].(*mcp.TextContent).Text
+		if !strings.Contains(text, visibleID) || strings.Contains(text, hiddenID) {
+			t.Fatalf("catalog crossed space boundary: %s", text)
+		}
+	}
+	assertCatalog(aliceSession, aliceSpaceID, bobSpaceID)
+	assertCatalog(bobSession, bobSpaceID, aliceSpaceID)
+
+	remember := func(session *mcp.ClientSession, spaceID, key, marker string) *mcp.CallToolResult {
+		t.Helper()
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "remember",
+			Arguments: map[string]any{
+				"target_space_id": spaceID,
+				"title":           marker,
+				"body":            marker,
+				"use_when":        "Testing authenticated MCP isolation.",
+				"kind":            "fact",
+				"reason":          "integration test",
+				"idempotency_key": key,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	aliceMemory := remember(aliceSession, aliceSpaceID, "alice-own-memory", "ALICE-ONLY-MARKER")
+	if aliceMemory.IsError {
+		t.Fatalf("alice own-space write failed: %#v", aliceMemory)
+	}
+	if crossWrite := remember(aliceSession, bobSpaceID, "alice-cross-write", "CROSS-WRITE"); !crossWrite.IsError {
+		t.Fatalf("alice wrote to bob's space: %#v", crossWrite)
+	}
+	var created struct {
+		Memory struct {
+			ID string `json:"id"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal(
+		[]byte(aliceMemory.Content[0].(*mcp.TextContent).Text),
+		&created,
+	); err != nil || created.Memory.ID == "" {
+		t.Fatalf("decode alice memory: id=%q error=%v", created.Memory.ID, err)
+	}
+	bobRead, err := bobSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_memory",
+		Arguments: map[string]any{"memory_id": created.Memory.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bobRead.IsError {
+		t.Fatalf("bob read alice's memory: %#v", bobRead)
 	}
 }

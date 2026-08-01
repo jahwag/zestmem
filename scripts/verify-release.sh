@@ -2,7 +2,7 @@
 set -eu
 
 version="${1:?release tag required}"
-repo="Bytelope/zestmem"
+repo="jahwag/zestmem"
 command -v gh >/dev/null
 command -v cosign >/dev/null
 tmp="$(mktemp -d)"

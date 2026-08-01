@@ -21,9 +21,9 @@ builds:
     ldflags:
       - >-
         -s -w -buildid=
-        -X github.com/bytelope/zestmem/internal/buildinfo.Version={{.Version}}
-        -X github.com/bytelope/zestmem/internal/buildinfo.Revision={{.FullCommit}}
-        -X github.com/bytelope/zestmem/internal/buildinfo.Date={{.CommitDate}}
+        -X github.com/jahwag/zestmem/internal/buildinfo.Version={{.Version}}
+        -X github.com/jahwag/zestmem/internal/buildinfo.Revision={{.FullCommit}}
+        -X github.com/jahwag/zestmem/internal/buildinfo.Date={{.CommitDate}}
     mod_timestamp: '{{ .CommitTimestamp }}'
   - <<: *build
     id: memoryctl
@@ -49,7 +49,7 @@ archives:
         formats: [zip]
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
     files:
-      - LICENSE.md
+      - LICENSE
       - README.md
     wrap_in_directory: true
     builds_info:
