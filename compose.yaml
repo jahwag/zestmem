@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: docker.io/pgvector/pgvector:pg17@sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0 # pg17
+    image: docker.io/pgvector/pgvector:pg17@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38 # pg17
     environment:
       POSTGRES_DB: memory
       POSTGRES_USER: memory
