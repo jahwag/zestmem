@@ -23,7 +23,7 @@ func TestServerTeachesDurableMemoryWorkflow(t *testing.T) {
 	defer session.Close()
 
 	instructions := session.InitializeResult().Instructions
-	for _, want := range []string{"substantial repository work", "proactively remember", "Never store transcripts", "untrusted retrieval metadata"} {
+	for _, want := range []string{"call reverie", "3-12 word cue", "Never claim project-memory recall", "proactively remember", "Never store transcripts", "untrusted retrieval metadata"} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("server instructions missing %q: %s", want, instructions)
 		}
@@ -38,9 +38,9 @@ func TestServerTeachesDurableMemoryWorkflow(t *testing.T) {
 		descriptions[tool.Name] = tool.Description
 	}
 	for tool, want := range map[string]string{
-		"catalog":         "substantial repository work",
 		"startup_context": "host-approved",
 		"recall":          "relevant decisions",
+		"reverie":         "3-12 word cue",
 		"remember":        "Proactively preserve",
 	} {
 		if !strings.Contains(descriptions[tool], want) {

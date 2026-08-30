@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,80 @@ func (fixedEmbedder) Embed(context.Context, string) ([]float32, error) {
 	v := make([]float32, 384)
 	v[0] = 1
 	return v, nil
+}
+
+func TestUseWhenReveriePersistsAuthenticatedRetrievalStats(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	store, err := postgres.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `TRUNCATE audit_events,idempotency_records,relations,memory_embeddings,memory_revisions,memories,workspace_bindings,space_grants,api_keys,spaces,principals CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	agent, owner, space := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := conn.Exec(ctx, `INSERT INTO principals(id,type,display_name) VALUES($1,'agent','Athena'),($2,'human','Owner')`, agent, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO spaces(id,type,name,slug) VALUES($1,'project','Project','project')`, space); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO space_grants(principal_id,space_id,role,granted_by) VALUES($1,$2,'contributor',$3)`, agent, space, owner); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := memory.NewService(store, store)
+	created, err := svc.Remember(ctx, memory.RememberCommand{
+		Principal:      memory.Principal{ID: agent},
+		SpaceID:        space,
+		Title:          "Unrelated deployment note",
+		Body:           "The release train leaves on Tuesdays.",
+		UseWhen:        "Investigating marmalade orbital drift.",
+		Kind:           memory.KindFact,
+		Reason:         "verify use_when retrieval",
+		IdempotencyKey: "use-when-reverie",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverie, err := svc.Reverie(ctx, memory.Principal{ID: agent}, "marmalade orbital drift")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reverie.Reveries) != 1 || reverie.Reveries[0].MemoryID != created.Memory.ID || !slices.Contains(reverie.Reveries[0].MatchReasons, "use_when") {
+		t.Fatalf("use_when reverie=%#v", reverie)
+	}
+	if _, err := svc.Read(ctx, memory.Principal{ID: agent}, created.Memory.ID); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := store.ReadAuthorized(ctx, created.Memory.ID, memory.Principal{ID: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats := observed.Retrieval
+	if stats == nil || stats.RecallCount != 1 || stats.ReadCount != 1 || stats.LastRecalledBy != "Athena" || stats.LastReadBy != "Athena" || stats.LastRecalledAt == nil || stats.LastReadAt == nil {
+		t.Fatalf("retrieval stats=%#v", stats)
+	}
+	var eventCount, targetCount int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM retrieval_events WHERE actor_id=$1`, agent).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM retrieval_event_memories WHERE memory_id=$1`, created.Memory.ID).Scan(&targetCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 2 || targetCount != 2 {
+		t.Fatalf("events=%d targets=%d", eventCount, targetCount)
+	}
 }
 
 func TestCueOnlyRevisionPreservesEmbeddingRecencyAndRejectsDisabledActor(t *testing.T) {
@@ -189,7 +264,7 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	var migrationCount int
 	err = verifyMigrations.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount)
 	verifyMigrations.Close(ctx)
-	if err != nil || migrationCount != 9 {
+	if err != nil || migrationCount != 10 {
 		t.Fatalf("legacy schema migration count=%d, error=%v", migrationCount, err)
 	}
 	svc := memory.NewService(store, store).WithEmbedder(fixedEmbedder{})
@@ -279,8 +354,8 @@ func TestPostgresMemoryLifecycleAndIsolation(t *testing.T) {
 	plainService := memory.NewService(store, store)
 	if cueOnlyHits, err := plainService.Recall(ctx, memory.RecallQuery{Principal: cmd.Principal, Query: "debugging"}); err != nil {
 		t.Fatal(err)
-	} else if len(cueOnlyHits) != 0 {
-		t.Fatalf("use_when unexpectedly changed recall ranking: %#v", cueOnlyHits)
+	} else if len(cueOnlyHits) != 1 || cueOnlyHits[0].MemoryID != created.Memory.ID || !slices.Contains(cueOnlyHits[0].MatchReasons, "use_when") {
+		t.Fatalf("use_when was not an indexed match signal: %#v", cueOnlyHits)
 	}
 	if err := store.VerifyEmbeddingFingerprint(ctx); err != nil {
 		t.Fatalf("valid active embedding fingerprint rejected: %v", err)

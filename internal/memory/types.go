@@ -3,8 +3,11 @@ package memory
 import "time"
 
 const (
-	MaxBodyBytes    = 16 * 1024
-	MaxUseWhenBytes = 240
+	MaxBodyBytes       = 16 * 1024
+	MaxUseWhenBytes    = 240
+	MaxReverieCueBytes = 240
+	MinReverieCueWords = 3
+	MaxReverieCueWords = 12
 )
 
 type Kind string
@@ -111,6 +114,7 @@ type Memory struct {
 	CurrentRevision        Revision                `json:"current_revision"`
 	CreatedAt              time.Time               `json:"created_at"`
 	HistoricalAssociations []HistoricalAssociation `json:"historical_associations,omitempty"`
+	Retrieval              *MemoryRetrievalStats   `json:"retrieval,omitempty"`
 }
 
 type DuplicateCandidate struct {
@@ -131,16 +135,17 @@ type MutationResult struct {
 }
 
 type Hit struct {
-	MemoryID   string   `json:"memory_id"`
-	SpaceID    string   `json:"space_id"`
-	Title      string   `json:"title"`
-	UseWhen    string   `json:"use_when,omitempty"`
-	Kind       Kind     `json:"kind"`
-	Topics     []string `json:"topics,omitempty"`
-	Excerpt    string   `json:"excerpt"`
-	Revision   int      `json:"revision"`
-	Score      float64  `json:"score"`
-	Provenance string   `json:"provenance"`
+	MemoryID     string   `json:"memory_id"`
+	SpaceID      string   `json:"space_id"`
+	Title        string   `json:"title"`
+	UseWhen      string   `json:"use_when,omitempty"`
+	Kind         Kind     `json:"kind"`
+	Topics       []string `json:"topics,omitempty"`
+	Excerpt      string   `json:"excerpt"`
+	Revision     int      `json:"revision"`
+	Score        float64  `json:"score"`
+	Provenance   string   `json:"provenance"`
+	MatchReasons []string `json:"match_reasons,omitempty"`
 }
 
 type WorkspaceClaim struct {
@@ -167,6 +172,47 @@ type RecallResult struct {
 	Hits       []Hit  `json:"hits"`
 	TotalCount int    `json:"total_count"`
 	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+type ReverieResult struct {
+	Cue        string `json:"cue"`
+	Reveries   []Hit  `json:"reveries"`
+	TotalCount int    `json:"total_count"`
+}
+
+type RetrievalOperation string
+
+const (
+	RetrievalRecall      RetrievalOperation = "recall"
+	RetrievalReverie     RetrievalOperation = "reverie"
+	RetrievalRead        RetrievalOperation = "read_memory"
+	RetrievalReadSegment RetrievalOperation = "read_memory_segment"
+)
+
+type RetrievalTarget struct {
+	MemoryID string
+	Revision int
+	Rank     int
+}
+
+type RetrievalEvent struct {
+	PrincipalID string
+	Operation   RetrievalOperation
+	Cue         string
+	ResultCount int
+	Targets     []RetrievalTarget
+	CreatedAt   time.Time
+}
+
+type MemoryRetrievalStats struct {
+	LastRecalledAt   *time.Time `json:"last_recalled_at,omitempty"`
+	LastRecalledByID string     `json:"last_recalled_by_id,omitempty"`
+	LastRecalledBy   string     `json:"last_recalled_by,omitempty"`
+	RecallCount      int        `json:"recall_count"`
+	LastReadAt       *time.Time `json:"last_read_at,omitempty"`
+	LastReadByID     string     `json:"last_read_by_id,omitempty"`
+	LastReadBy       string     `json:"last_read_by,omitempty"`
+	ReadCount        int        `json:"read_count"`
 }
 
 type MetadataFacet string

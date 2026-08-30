@@ -114,11 +114,11 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 10 {
+	if len(listed.Tools) != 11 {
 		t.Fatalf("tool count=%d", len(listed.Tools))
 	}
 	var rememberRequired []string
-	var reviseSchema, startupSchema string
+	var reviseSchema, startupSchema, reverieSchema string
 	for _, tool := range listed.Tools {
 		if tool.Name == "revise_memory" {
 			raw, err := json.Marshal(tool.InputSchema)
@@ -133,6 +133,13 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			startupSchema = string(raw)
+		}
+		if tool.Name == "reverie" {
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reverieSchema = string(raw)
 		}
 		if tool.Name != "remember" {
 			continue
@@ -154,6 +161,16 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if strings.Contains(startupSchema, `"cursor"`) || !strings.Contains(startupSchema, `"preferred_space_id"`) {
 		t.Fatalf("startup context exposed wrong pagination schema: %s", startupSchema)
+	}
+	var reverieInputSchema struct {
+		Properties map[string]any `json:"properties"`
+		Required   []string       `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(reverieSchema), &reverieInputSchema); err != nil {
+		t.Fatal(err)
+	}
+	if len(reverieInputSchema.Properties) != 1 || reverieInputSchema.Properties["cue"] == nil || !slices.Equal(reverieInputSchema.Required, []string{"cue"}) {
+		t.Fatalf("reverie input schema=%s", reverieSchema)
 	}
 	for _, phrase := range []string{"explicitly pass its current value to preserve it", "empty string to clear it", "240 UTF-8 bytes", "untrusted"} {
 		if !strings.Contains(reviseSchema, phrase) {
@@ -285,6 +302,13 @@ func TestStreamableHTTPListsAndCallsAllTools(t *testing.T) {
 	}
 	if result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, revisedUseWhen) {
 		t.Fatalf("recall omitted revised use_when: %#v", result)
+	}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "reverie", Arguments: map[string]any{"cue": "MCP mutation context"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, revisedUseWhen) {
+		t.Fatalf("reverie omitted revised use_when: %#v", result)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)

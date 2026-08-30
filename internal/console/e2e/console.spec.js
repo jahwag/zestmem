@@ -20,6 +20,7 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.locator('#spaces').getByRole('button', {name: /Beta Space/})).toHaveCount(0);
   await page.getByRole('button', {name: /Reader keys only/}).click();
   await expect(page.locator('.memory-eyebrow')).toContainText('Unknown space');
+  await expect(page.locator('#memory .memory-facts').getByText('Never', {exact: true}).first()).toBeVisible();
   await expect(page.getByRole('heading', {name: 'Historical association'})).toHaveCount(0);
   await page.getByRole('button', {name: 'Load more Spaces'}).click();
   await expect(page.getByText('2 readable Spaces')).toBeVisible();
@@ -33,8 +34,16 @@ test('browses, filters, searches, paginates, and safely renders memories', async
   await expect(page.getByText('Prevent active content in durable memories')).toBeVisible();
   await expect(page.getByText('Authenticated revision actor', {exact: true})).toBeVisible();
   await expect(page.getByText('Migration Operator', {exact: true})).toBeVisible();
+  const memoryFacts = page.locator('#memory .memory-facts');
+  await expect(memoryFacts.getByText('Last recalled', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('Recall count', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('Last recalled by', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('Last agent read', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('Agent read count', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('4', {exact: true})).toBeVisible();
+  await expect(memoryFacts.getByText('2', {exact: true})).toBeVisible();
   await expect(page.getByRole('heading', {name: 'Historical association'})).toBeVisible();
-  await expect(page.getByText('Athena', {exact: true})).toBeVisible();
+  await expect(page.getByRole('listitem').getByText('Athena', {exact: true})).toBeVisible();
   await expect(page.getByText('Administratively recorded intended agent')).toBeVisible();
   await expect(page.getByText('Asserted by')).toBeVisible();
   await expect(page.getByText('Basis: revision 1 · legacy_role_path: worker/athena')).toBeVisible();

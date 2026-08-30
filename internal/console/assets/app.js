@@ -371,10 +371,16 @@
     heading.append(topics);
     article.append(heading, element('pre', 'body', revision.body));
 
-    const facts = element('dl', 'memory-facts');
-    addFact(facts, 'Remembered', formatDate(memory.created_at));
-    addFact(facts, 'Revision made', formatDate(revision.created_at));
-    addFact(facts, 'Authenticated revision actor', revision.actor_display_name || 'Not set');
+  const facts = element('dl', 'memory-facts');
+  addFact(facts, 'Remembered', formatDate(memory.created_at));
+  addFact(facts, 'Revision made', formatDate(revision.created_at));
+  const retrieval = memory.retrieval || {};
+  addFact(facts, 'Last recalled', retrieval.last_recalled_at ? formatDate(retrieval.last_recalled_at) : 'Never');
+  addFact(facts, 'Recall count', String(retrieval.recall_count || 0));
+  addFact(facts, 'Last recalled by', retrieval.last_recalled_by || 'Never');
+  addFact(facts, 'Last agent read', retrieval.last_read_at ? formatDate(retrieval.last_read_at) : 'Never');
+  addFact(facts, 'Agent read count', String(retrieval.read_count || 0));
+  addFact(facts, 'Authenticated revision actor', revision.actor_display_name || 'Not set');
     addFact(facts, 'Authenticated Principal ID', revision.actor_id || 'Unknown Principal');
     addFact(facts, 'Valid until', revision.valid_until ? formatDate(revision.valid_until) : 'No expiry');
     addFact(facts, 'Status', memory.status);

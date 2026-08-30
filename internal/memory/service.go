@@ -113,29 +113,51 @@ type RetractCommand struct {
 }
 
 type Service struct {
-	repo     Repository
-	auth     Authorizer
-	embedder Embedder
-	now      func() time.Time
-	id       func() string
+	repo       Repository
+	auth       Authorizer
+	embedder   Embedder
+	retrievals RetrievalRecorder
+	now        func() time.Time
+	id         func() string
 }
 
 type Embedder interface {
 	Embed(context.Context, string) ([]float32, error)
 }
 
+type RetrievalRecorder interface {
+	RecordRetrieval(context.Context, RetrievalEvent) error
+}
+
 func NewService(repo Repository, auth Authorizer) *Service {
-	return &Service{
+	service := &Service{
 		repo: repo,
 		auth: auth,
 		now:  func() time.Time { return time.Now().UTC() },
 		id:   func() string { return uuid.Must(uuid.NewV7()).String() },
 	}
+	if recorder, ok := repo.(RetrievalRecorder); ok {
+		service.retrievals = recorder
+	}
+	return service
 }
 
 func (s *Service) WithEmbedder(embedder Embedder) *Service {
 	s.embedder = embedder
 	return s
+}
+
+func (s *Service) WithRetrievalRecorder(recorder RetrievalRecorder) *Service {
+	s.retrievals = recorder
+	return s
+}
+
+func (s *Service) recordRetrieval(ctx context.Context, event RetrievalEvent) error {
+	if s.retrievals == nil {
+		return nil
+	}
+	event.CreatedAt = s.now()
+	return s.retrievals.RecordRetrieval(ctx, event)
 }
 
 func (s *Service) embed(ctx context.Context, text string) ([]float32, error) {
@@ -381,14 +403,34 @@ func replayed(result MutationResult) MutationResult {
 }
 
 func (s *Service) Read(ctx context.Context, principal Principal, memoryID string) (Memory, error) {
-	return s.repo.ReadAuthorized(ctx, memoryID, principal)
+	return s.read(ctx, principal, memoryID, RetrievalRead)
+}
+
+func (s *Service) read(ctx context.Context, principal Principal, memoryID string, operation RetrievalOperation) (Memory, error) {
+	memoryValue, err := s.repo.ReadAuthorized(ctx, memoryID, principal)
+	if err != nil {
+		return Memory{}, err
+	}
+	if err := s.recordRetrieval(ctx, RetrievalEvent{
+		PrincipalID: principal.ID,
+		Operation:   operation,
+		ResultCount: 1,
+		Targets: []RetrievalTarget{{
+			MemoryID: memoryValue.ID,
+			Revision: memoryValue.CurrentRevision.Number,
+			Rank:     1,
+		}},
+	}); err != nil {
+		return Memory{}, err
+	}
+	return memoryValue, nil
 }
 
 func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegmentResult, error) {
 	if strings.TrimSpace(query.MemoryID) == "" {
 		return ReadSegmentResult{}, fmt.Errorf("%w: memory_id is required", ErrInvalidInput)
 	}
-	memoryValue, err := s.Read(ctx, query.Principal, query.MemoryID)
+	memoryValue, err := s.repo.ReadAuthorized(ctx, query.MemoryID, query.Principal)
 	if err != nil {
 		return ReadSegmentResult{}, err
 	}
@@ -448,7 +490,7 @@ func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegment
 				window.NextStartByte = end
 			}
 			result.Content, result.Window = content, window
-			return result, nil
+			return s.finishReadSegment(ctx, query.Principal, result)
 		}
 		if query.StartLine == 0 {
 			query.StartLine = 1
@@ -473,7 +515,7 @@ func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegment
 			window.NextStartLine = end + 1
 		}
 		result.Content, result.Window = content, window
-		return result, nil
+		return s.finishReadSegment(ctx, query.Principal, result)
 	}
 	if len(query.Pattern) > 512 || query.ContextLines < 0 || query.ContextLines > 10 {
 		return ReadSegmentResult{}, fmt.Errorf("%w: pattern exceeds 512 bytes or context_lines is outside 0..10", ErrInvalidInput)
@@ -530,6 +572,22 @@ func (s *Service) ReadSegment(ctx context.Context, query ReadQuery) (ReadSegment
 	result.OmittedMatchGroups = len(ranges) - consumed
 	if consumed < len(ranges) {
 		result.NextMatchStartLine = ranges[consumed].start + 1
+	}
+	return s.finishReadSegment(ctx, query.Principal, result)
+}
+
+func (s *Service) finishReadSegment(ctx context.Context, principal Principal, result ReadSegmentResult) (ReadSegmentResult, error) {
+	if err := s.recordRetrieval(ctx, RetrievalEvent{
+		PrincipalID: principal.ID,
+		Operation:   RetrievalReadSegment,
+		ResultCount: 1,
+		Targets: []RetrievalTarget{{
+			MemoryID: result.MemoryID,
+			Revision: result.Revision,
+			Rank:     1,
+		}},
+	}); err != nil {
+		return ReadSegmentResult{}, err
 	}
 	return result, nil
 }
@@ -803,6 +861,22 @@ func (s *Service) BrowsePage(ctx context.Context, query BrowseQuery) (BrowseResu
 }
 
 func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResult, error) {
+	return s.recallPage(ctx, query, RetrievalRecall)
+}
+
+func (s *Service) Reverie(ctx context.Context, principal Principal, cue string) (ReverieResult, error) {
+	cue, err := NormalizeReverieCue(cue)
+	if err != nil {
+		return ReverieResult{}, err
+	}
+	result, err := s.recallPage(ctx, RecallQuery{Principal: principal, Query: cue, Limit: 5}, RetrievalReverie)
+	if err != nil {
+		return ReverieResult{}, err
+	}
+	return ReverieResult{Cue: cue, Reveries: result.Hits, TotalCount: result.TotalCount}, nil
+}
+
+func (s *Service) recallPage(ctx context.Context, query RecallQuery, operation RetrievalOperation) (RecallResult, error) {
 	query.Query = strings.TrimSpace(query.Query)
 	query.Topics = normalizeTopics(query.Topics)
 	if query.Query == "" {
@@ -858,6 +932,9 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 	if repositoryMore {
 		hits = hits[:requested]
 	}
+	for i := range hits {
+		hits[i].MatchReasons = inferMatchReasons(query.Query, hits[i])
+	}
 	const tokenBudget = 2000
 	buildResult := func(candidate []Hit, more bool) RecallResult {
 		result := RecallResult{Hits: candidate, TotalCount: page.TotalCount}
@@ -894,7 +971,21 @@ func (s *Service) RecallPage(ctx context.Context, query RecallQuery) (RecallResu
 		// field bounds rather than returning a zero-advance page.
 		keep = 1
 	}
-	return buildResult(hits[:keep], repositoryMore || keep < len(hits)), nil
+	result := buildResult(hits[:keep], repositoryMore || keep < len(hits))
+	targets := make([]RetrievalTarget, 0, len(result.Hits))
+	for i, hit := range result.Hits {
+		targets = append(targets, RetrievalTarget{MemoryID: hit.MemoryID, Revision: hit.Revision, Rank: i + 1})
+	}
+	if err := s.recordRetrieval(ctx, RetrievalEvent{
+		PrincipalID: query.Principal.ID,
+		Operation:   operation,
+		Cue:         query.Query,
+		ResultCount: result.TotalCount,
+		Targets:     targets,
+	}); err != nil {
+		return RecallResult{}, err
+	}
+	return result, nil
 }
 
 func encodeCursor(kind string, offset int) string {
@@ -1145,6 +1236,75 @@ func NormalizeUseWhen(value string) (string, error) {
 		return "", fmt.Errorf("%w: use_when exceeds %d bytes", ErrInvalidInput, MaxUseWhenBytes)
 	}
 	return normalized, nil
+}
+
+func NormalizeReverieCue(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("%w: reverie cue must be valid UTF-8", ErrInvalidInput)
+	}
+	value = norm.NFC.String(value)
+	var out strings.Builder
+	pendingSpace := false
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || isUnicodeNoncharacter(r) {
+			return "", fmt.Errorf("%w: reverie cue contains unsafe formatting", ErrInvalidInput)
+		}
+		if unicode.IsSpace(r) {
+			pendingSpace = out.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			out.WriteByte(' ')
+			pendingSpace = false
+		}
+		out.WriteRune(r)
+	}
+	normalized := out.String()
+	if normalized == "" {
+		return "", fmt.Errorf("%w: reverie cue is required", ErrInvalidInput)
+	}
+	if len([]byte(normalized)) > MaxReverieCueBytes {
+		return "", fmt.Errorf("%w: reverie cue exceeds %d bytes", ErrInvalidInput, MaxReverieCueBytes)
+	}
+	wordCount := len(strings.Fields(normalized))
+	if wordCount < MinReverieCueWords || wordCount > MaxReverieCueWords {
+		return "", fmt.Errorf("%w: reverie cue must contain %d-%d words", ErrInvalidInput, MinReverieCueWords, MaxReverieCueWords)
+	}
+	return normalized, nil
+}
+
+func inferMatchReasons(query string, hit Hit) []string {
+	terms := wordSet(query)
+	reasons := make([]string, 0, 3)
+	for _, candidate := range []struct {
+		name  string
+		value string
+	}{{"title", hit.Title}, {"use_when", hit.UseWhen}, {"content", hit.Excerpt}} {
+		words := wordSet(candidate.value)
+		for term := range terms {
+			if _, ok := words[term]; ok {
+				reasons = append(reasons, candidate.name)
+				break
+			}
+		}
+	}
+	if len(reasons) == 0 {
+		return []string{"hybrid"}
+	}
+	return reasons
+}
+
+func wordSet(value string) map[string]struct{} {
+	words := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	out := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		if word != "" {
+			out[word] = struct{}{}
+		}
+	}
+	return out
 }
 
 func isUnicodeNoncharacter(r rune) bool {

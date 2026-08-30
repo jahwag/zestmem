@@ -76,8 +76,16 @@ func TestApplyCreatesAndRechecksFreshDatabase(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(versions) != "[1 2 3 4 5 6 7 8 9]" {
+	if fmt.Sprint(versions) != "[1 2 3 4 5 6 7 8 9 10]" {
 		t.Fatalf("applied versions=%v", versions)
+	}
+	var retrievalTables int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
+WHERE table_schema='public' AND table_name IN ('retrieval_events','retrieval_event_memories')`).Scan(&retrievalTables); err != nil {
+		t.Fatal(err)
+	}
+	if retrievalTables != 2 {
+		t.Fatalf("retrieval tables=%d", retrievalTables)
 	}
 	var nullableUseWhen bool
 	if err := pool.QueryRow(ctx, `SELECT is_nullable='YES' FROM information_schema.columns
@@ -147,7 +155,7 @@ func TestApplyCreatesAndRechecksFreshDatabase(t *testing.T) {
 	if !authorizationFunctions {
 		t.Fatal("authorization functions were not installed")
 	}
-	for _, name := range []string{"009_active_direct_roles.down.sql", "008_content_updated_at.down.sql", "007_space_use_when.down.sql", "006_use_when_validation.down.sql", "005_use_when.down.sql"} {
+	for _, name := range []string{"010_retrieval_observability.down.sql", "009_active_direct_roles.down.sql", "008_content_updated_at.down.sql", "007_space_use_when.down.sql", "006_use_when_validation.down.sql", "005_use_when.down.sql"} {
 		body, err := files.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
