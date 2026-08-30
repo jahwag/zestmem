@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,7 +159,63 @@ func (s *Store) ReadAuthorized(ctx context.Context, id string, principal memory.
 	if errors.Is(err, pgx.ErrNoRows) {
 		return memory.Memory{}, memory.ErrNotFound
 	}
-	return mem, err
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	stats, err := s.memoryRetrievalStats(ctx, id)
+	if err != nil {
+		return memory.Memory{}, err
+	}
+	mem.Retrieval = &stats
+	return mem, nil
+}
+
+func (s *Store) RecordRetrieval(ctx context.Context, event memory.RetrievalEvent) error {
+	cue := strings.TrimSpace(event.Cue)
+	digest := sha256.Sum256([]byte(cue))
+	if len([]byte(cue)) > memory.MaxReverieCueBytes {
+		cue = ""
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var eventID int64
+	if event.CreatedAt.IsZero() {
+		err = tx.QueryRow(ctx, `INSERT INTO retrieval_events(actor_id,operation,cue,cue_hash,result_count)
+ VALUES($1,$2,$3,$4,$5) RETURNING id`, event.PrincipalID, event.Operation, cue, fmt.Sprintf("%x", digest), event.ResultCount).Scan(&eventID)
+	} else {
+		err = tx.QueryRow(ctx, `INSERT INTO retrieval_events(actor_id,operation,cue,cue_hash,result_count,created_at)
+ VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, event.PrincipalID, event.Operation, cue, fmt.Sprintf("%x", digest), event.ResultCount, event.CreatedAt).Scan(&eventID)
+	}
+	if err != nil {
+		return err
+	}
+	for _, target := range event.Targets {
+		if _, err := tx.Exec(ctx, `INSERT INTO retrieval_event_memories(event_id,memory_id,revision,rank)
+ VALUES($1,$2,$3,$4)`, eventID, target.MemoryID, target.Revision, target.Rank); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) memoryRetrievalStats(ctx context.Context, memoryID string) (memory.MemoryRetrievalStats, error) {
+	var stats memory.MemoryRetrievalStats
+	err := s.pool.QueryRow(ctx, `SELECT
+ (SELECT max(e.created_at) FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('recall','reverie')),
+ (SELECT count(*) FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('recall','reverie')),
+ coalesce((SELECT p.id::text FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('recall','reverie') ORDER BY e.created_at DESC,e.id DESC LIMIT 1),''),
+ coalesce((SELECT p.display_name FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('recall','reverie') ORDER BY e.created_at DESC,e.id DESC LIMIT 1),''),
+ (SELECT max(e.created_at) FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('read_memory','read_memory_segment')),
+ (SELECT count(*) FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('read_memory','read_memory_segment')),
+ coalesce((SELECT p.id::text FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('read_memory','read_memory_segment') ORDER BY e.created_at DESC,e.id DESC LIMIT 1),''),
+ coalesce((SELECT p.display_name FROM retrieval_events e JOIN retrieval_event_memories t ON t.event_id=e.id JOIN principals p ON p.id=e.actor_id WHERE t.memory_id=$1 AND p.type='agent' AND e.operation IN ('read_memory','read_memory_segment') ORDER BY e.created_at DESC,e.id DESC LIMIT 1),'')`, memoryID).Scan(
+		&stats.LastRecalledAt, &stats.RecallCount, &stats.LastRecalledByID, &stats.LastRecalledBy,
+		&stats.LastReadAt, &stats.ReadCount, &stats.LastReadByID, &stats.LastReadBy,
+	)
+	return stats, err
 }
 
 func (s *Store) Revise(ctx context.Context, rec memory.ReviseRecord) (memory.Memory, error) {

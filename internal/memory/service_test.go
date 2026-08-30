@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -460,6 +462,77 @@ func TestRememberRejectsUnsafeUseWhen(t *testing.T) {
 	}
 }
 
+func TestNormalizeReverieCue(t *testing.T) {
+	normalized, err := NormalizeReverieCue("  diagnose   postgres pool failures  ")
+	if err != nil || normalized != "diagnose postgres pool failures" {
+		t.Fatalf("normalized=%q err=%v", normalized, err)
+	}
+	for name, cue := range map[string]string{
+		"too short":      "pool failures",
+		"too long":       "one two three four five six seven eight nine ten eleven twelve thirteen",
+		"unsafe control": "diagnose postgres\x00 failures",
+		"invalid UTF-8":  string([]byte{'a', 'b', 'c', ' ', 0xff, ' ', 'x'}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NormalizeReverieCue(cue); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestReverieAndReadsRecordAuthenticatedRetrievals(t *testing.T) {
+	svc, repo, _ := testService()
+	recorder := &fakeRetrievalRecorder{}
+	svc.WithRetrievalRecorder(recorder)
+	for i := 0; i < 7; i++ {
+		repo.hits = append(repo.hits, Hit{
+			MemoryID: "memory-" + strconv.Itoa(i),
+			SpaceID:  "project",
+			Title:    "Connection guidance",
+			UseWhen:  "Diagnosing postgres pool failures.",
+			Kind:     KindFact,
+			Revision: 2,
+			Score:    1,
+		})
+	}
+
+	result, err := svc.Reverie(context.Background(), Principal{ID: "athena"}, " diagnose  postgres pool failures ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Cue != "diagnose postgres pool failures" || len(result.Reveries) != 5 || result.TotalCount != 7 {
+		t.Fatalf("reverie=%#v", result)
+	}
+	if !slices.Contains(result.Reveries[0].MatchReasons, "use_when") {
+		t.Fatalf("match reasons=%v", result.Reveries[0].MatchReasons)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Operation != RetrievalReverie || recorder.events[0].PrincipalID != "athena" || recorder.events[0].Cue != result.Cue || len(recorder.events[0].Targets) != 5 {
+		t.Fatalf("events=%#v", recorder.events)
+	}
+
+	repo.hits = nil
+	created, err := svc.Remember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Read(context.Background(), Principal{ID: "agent"}, created.Memory.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID, Pattern: "["}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid segment error=%v", err)
+	}
+	if len(recorder.events) != 2 {
+		t.Fatalf("invalid segment recorded retrieval: %#v", recorder.events)
+	}
+	if _, err := svc.ReadSegment(context.Background(), ReadQuery{Principal: Principal{ID: "agent"}, MemoryID: created.Memory.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.events) != 3 || recorder.events[1].Operation != RetrievalRead || recorder.events[2].Operation != RetrievalReadSegment {
+		t.Fatalf("events=%#v", recorder.events)
+	}
+}
+
 func TestRememberUseWhenParticipatesInIdempotency(t *testing.T) {
 	svc, _, _ := testService()
 	cmd := validRemember()
@@ -764,6 +837,16 @@ type fakeAuth struct {
 	spaces    []string
 	err       error
 	actionErr map[Action]error
+}
+
+type fakeRetrievalRecorder struct {
+	events []RetrievalEvent
+	err    error
+}
+
+func (r *fakeRetrievalRecorder) RecordRetrieval(_ context.Context, event RetrievalEvent) error {
+	r.events = append(r.events, event)
+	return r.err
 }
 
 func (a *fakeAuth) Require(_ context.Context, _ Principal, _ string, action Action) error {

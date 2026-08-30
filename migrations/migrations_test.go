@@ -7,8 +7,8 @@ func TestLoadIncludesOnlyOrderedForwardMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 9 {
-		t.Fatalf("migration count=%d, want 9", len(loaded))
+	if len(loaded) != 10 {
+		t.Fatalf("migration count=%d, want 10", len(loaded))
 	}
 	if loaded[0].version != 1 || loaded[0].name != "init" {
 		t.Fatalf("first migration=%+v", loaded[0])
@@ -36,6 +36,9 @@ func TestLoadIncludesOnlyOrderedForwardMigrations(t *testing.T) {
 	}
 	if loaded[8].version != 9 || loaded[8].name != "active_direct_roles" {
 		t.Fatalf("ninth migration=%+v", loaded[8])
+	}
+	if loaded[9].version != 10 || loaded[9].name != "retrieval_observability" {
+		t.Fatalf("tenth migration=%+v", loaded[9])
 	}
 	for _, migration := range loaded {
 		if len(migration.checksum) != 64 {

@@ -170,8 +170,18 @@ func (fixtureService) Read(_ context.Context, _ memory.Principal, id string) (me
 			AssertedAt: time.Date(2026, 7, 20, 13, 0, 0, 0, time.UTC), Reason: strings.Repeat("Reviewed legacy mapping evidence. ", 40),
 		}}
 	}
+	lastRecalledAt := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
+	lastReadAt := time.Date(2026, 7, 21, 10, 5, 0, 0, time.UTC)
+	var retrieval *memory.MemoryRetrievalStats
+	if id == "memory-1" {
+		retrieval = &memory.MemoryRetrievalStats{
+			LastRecalledAt: &lastRecalledAt, LastRecalledByID: "athena-principal", LastRecalledBy: "Athena", RecallCount: 4,
+			LastReadAt: &lastReadAt, LastReadByID: "athena-principal", LastReadBy: "Athena", ReadCount: 2,
+		}
+	}
 	return memory.Memory{
 		ID: id, SpaceID: spaceID, Status: memory.StatusActive, CreatedAt: time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC),
+		Retrieval:              retrieval,
 		HistoricalAssociations: associations,
 		CurrentRevision: memory.Revision{
 			MemoryID: id, Number: 2, Title: title, Body: "Literal body: <img src=x onerror=window.hacked=true>",
