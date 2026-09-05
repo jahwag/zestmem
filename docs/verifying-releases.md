@@ -1,7 +1,7 @@
 # Verifying releases
 
 Authenticate `gh` with access to the private `Bytelope/zestmem` repository.
-The examples below target the next canonical release, `v0.10.0`; substitute
+The examples below target the canonical release, `v0.10.1`; substitute
 the exact version you are verifying.
 
 Download a release's archives, `checksums.txt`, signature bundles, SPDX JSON
@@ -10,25 +10,28 @@ SBOMs, and provenance. From that directory, run `sha256sum --check checksums.txt
 Verify keyless signatures while binding them to this repository and workflow:
 
 ```sh
-cosign verify-blob --bundle zestmem_0.10.0_linux_amd64.tar.gz.bundle \
-  --certificate-identity 'https://github.com/Bytelope/zestmem/.github/workflows/release.yml@refs/tags/v0.10.0' \
+cosign verify-blob --bundle zestmem_0.10.1_linux_amd64.tar.gz.bundle \
+  --certificate-identity 'https://github.com/Bytelope/zestmem/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  zestmem_0.10.0_linux_amd64.tar.gz
+  zestmem_0.10.1_linux_amd64.tar.gz
 ```
 
 Use `slsa-verifier verify-artifact --provenance-path multiple.intoto.jsonl
---source-uri github.com/Bytelope/zestmem --source-tag v0.10.0 <archive>` for each
+--source-uri github.com/Bytelope/zestmem --source-tag v0.10.1 <archive>` for each
 native archive.
 
 For images, select the immutable digest shown in the release workflow and run:
 
 ```sh
-cosign verify --certificate-identity 'https://github.com/Bytelope/zestmem/.github/workflows/release.yml@refs/tags/v0.10.0' \
+cosign verify --certificate-identity 'https://github.com/Bytelope/zestmem/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/bytelope/zestmem@sha256:...
-cosign verify-attestation --type spdxjson ghcr.io/bytelope/zestmem@sha256:...
 docker buildx imagetools inspect ghcr.io/bytelope/zestmem@sha256:...
 ```
+
+Repeat the image signature check for `ghcr.io/bytelope/zestmem-backup`.
+The workflow signs image digests; it does not publish a separate signed SPDX
+image attestation. Native archive SPDX SBOMs are attached to the release.
 
 The manifest must contain Linux amd64 and arm64. Inspect the configuration to
 confirm the server image runs as non-root and has only `/usr/local/bin/memoryd`.
