@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a vulnerability privately
-    url: https://github.com/jahwag/zestmem/security/advisories/new
+    url: https://github.com/Bytelope/zestmem/security/advisories/new
     about: Do not disclose security vulnerabilities in an issue; see SECURITY.md.
