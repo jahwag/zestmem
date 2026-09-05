@@ -1,7 +1,7 @@
 # Verifying releases
 
 Authenticate `gh` with access to the private `Bytelope/zestmem` repository.
-The examples below target the next canonical release, `v0.10.0`; substitute
+The examples below target the canonical release, `v0.10.0`; substitute
 the exact version you are verifying.
 
 Download a release's archives, `checksums.txt`, signature bundles, SPDX JSON
