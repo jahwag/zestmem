@@ -26,9 +26,12 @@ For images, select the immutable digest shown in the release workflow and run:
 cosign verify --certificate-identity 'https://github.com/Bytelope/zestmem/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/bytelope/zestmem@sha256:...
-cosign verify-attestation --type spdxjson ghcr.io/bytelope/zestmem@sha256:...
 docker buildx imagetools inspect ghcr.io/bytelope/zestmem@sha256:...
 ```
+
+Repeat the image signature check for `ghcr.io/bytelope/zestmem-backup`.
+The workflow signs image digests; it does not publish a separate signed SPDX
+image attestation. Native archive SPDX SBOMs are attached to the release.
 
 The manifest must contain Linux amd64 and arm64. Inspect the configuration to
 confirm the server image runs as non-root and has only `/usr/local/bin/memoryd`.
