@@ -9,7 +9,7 @@ tag, because releases made with `GITHUB_TOKEN` do not trigger another workflow
 through the `release` event. The workflow reproducibly builds, verifies, attests,
 signs, scans, and publishes assets and images. Never create release tags by hand.
 
-Release Please also dispatches CI for each updated release PR, because its
+Release Please also dispatches CI and the required title check for each updated release PR, because its
 `GITHUB_TOKEN`-created PRs do not trigger `pull_request` workflows. The weekly
 merge workflow waits for these checks before merging the release PR.
 

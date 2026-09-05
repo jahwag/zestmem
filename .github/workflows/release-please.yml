@@ -31,6 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PRS: ${{ steps.release.outputs.prs }}
         run: |
-          while IFS= read -r branch; do
+          while IFS=$'\t' read -r number branch; do
             gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-          done < <(jq -r '.[].headBranchName' <<< "$RELEASE_PRS")
+            gh workflow run pr-title.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" -f pr_number="$number"
+          done < <(jq -r '.[] | [.number, .headBranchName] | @tsv' <<< "$RELEASE_PRS")
