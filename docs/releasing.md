@@ -27,15 +27,15 @@ GitHub and registry access. The Go module path remains
 or release-download location.
 
 The deleted public repository published different code as `v0.9.0`. That
-version remains reserved. The canonical distribution resumed at `v0.10.0`,
-requested with a `Release-As: 0.10.0` Conventional Commit footer on the
-reconciliation change. The manifest now records that canonical release. Do not create or
+version remains reserved. Canonical native downloads resumed at `v0.10.0`.
+The backup image scan blocked that container release; `v0.10.1` updates the
+backup base packages and fixes SARIF severity filtering. Do not create or
 move a `v0.9.0` tag in this repository, or reuse its image tags for different
 code. Keep the existing release notes and tags as historical evidence.
 
 The public `ghcr.io/jahwag/` images are retained for existing installations,
 including cdev backup jobs. New release workflows never overwrite those
-images. `compose.yaml` uses the canonical `0.10.0` images for new installations,
+images. `compose.yaml` uses the canonical `0.10.1` images for new installations,
 which require registry authentication. Existing cdev deployments and backup
 jobs retain their separately pinned legacy digests; changing those running
 services remains a deployment migration.

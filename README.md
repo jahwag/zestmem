@@ -20,7 +20,7 @@ A Memory `use_when` is a one-line, body-supported routing hint describing concre
 
 ## Quick start
 
-The included Compose file runs ZestMem `0.10.0` from the canonical private
+The included Compose file runs ZestMem `0.10.1` from the canonical private
 `ghcr.io/bytelope/` packages. It requires Podman Compose or Docker Compose and
 registry access for your GitHub account. Log in with a GitHub personal access
 token that has `read:packages` and access to these packages.

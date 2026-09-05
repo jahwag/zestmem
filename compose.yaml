@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   memory:
-    image: ghcr.io/bytelope/zestmem:0.10.0
+    image: ghcr.io/bytelope/zestmem:0.10.1
     environment:
       DATABASE_URL: postgres://memory@postgres:5432/memory?sslmode=disable
       PGPASSWORD: ${POSTGRES_PASSWORD}
@@ -86,7 +86,7 @@ services:
     restart: unless-stopped
 
   backup:
-    image: ghcr.io/bytelope/zestmem-backup:0.10.0
+    image: ghcr.io/bytelope/zestmem-backup:0.10.1
     environment:
       PGHOST: postgres
       PGPORT: "5432"
