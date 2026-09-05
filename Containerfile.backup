@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.title="ZestMem Backup" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.source="https://github.com/Bytelope/zestmem" \
       org.opencontainers.image.licenses="LicenseRef-Proprietary"
-RUN rm /usr/local/bin/gosu && apt-get update && apt-get install -y --no-install-recommends age ca-certificates curl jq && rm -rf /var/lib/apt/lists/*
+RUN rm /usr/local/bin/gosu && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends age ca-certificates curl jq && rm -rf /var/lib/apt/lists/*
 COPY ops/backup.sh /usr/local/bin/backup.sh
 COPY ops/restore-test.sh /usr/local/bin/restore-test.sh
 COPY ops/backup-loop.sh /usr/local/bin/backup-loop.sh
