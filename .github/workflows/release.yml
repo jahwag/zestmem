@@ -16,25 +16,19 @@ concurrency:
   group: release-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 jobs:
-  native-a:
+  validate-release:
     runs-on: ubuntu-24.04
-    steps: &native_steps
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with: { ref: '${{ env.RELEASE_TAG }}', fetch-depth: 0, persist-credentials: false }
-      - name: Normalize archive input timestamps
+    steps:
+      - name: Require a canonical release and its tag ref
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          epoch="$(git show -s --format=%ct HEAD)"
-          touch --date="@$epoch" LICENSE README.md
-          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: false }
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with: { distribution: goreleaser, version: v2.12.7, args: release --clean }
-      - run: sh scripts/verify-archive-contents.sh dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with: { name: native-a, path: 'dist/*', retention-days: 3 }
-  native-b:
+          [[ "$GITHUB_REPOSITORY" == "Bytelope/zestmem" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then error("release is a draft") else . end'
+  native-a:
+    needs: validate-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -45,7 +39,26 @@ jobs:
           touch --date="@$epoch" LICENSE README.md
           echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version: '1.25.12', cache: false }
+        with: { go-version: '1.25.13', cache: false }
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with: { distribution: goreleaser, version: v2.12.7, args: release --clean }
+      - run: sh scripts/verify-archive-contents.sh dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: native-a, path: 'dist/*', retention-days: 3 }
+  native-b:
+    needs: validate-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { ref: '${{ env.RELEASE_TAG }}', fetch-depth: 0, persist-credentials: false }
+      - name: Normalize archive input timestamps
+        run: |
+          epoch="$(git show -s --format=%ct HEAD)"
+          touch --date="@$epoch" LICENSE README.md
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: '1.25.13', cache: false }
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with: { distribution: goreleaser, version: v2.12.7, args: release --clean }
@@ -139,15 +152,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.RELEASE_TAG }}
-          IMAGE: ghcr.io/jahwag/${{ matrix.image }}
+          IMAGE: ghcr.io/bytelope/${{ matrix.image }}
         run: |
           version="${TAG#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
           rest="${version#*.}"
           echo "minor=${version%%.*}.${rest%%.*}" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "created=$(gh release view "$TAG" --json publishedAt --jq .publishedAt)" >> "$GITHUB_OUTPUT"
+          echo "created=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt)" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -159,10 +173,10 @@ jobs:
           sbom: true
           tags: |
             ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version }}
-            ${{ steps.vars.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.revision }}
           build-args: |
             VERSION=${{ steps.vars.outputs.version }}
-            REVISION=${{ github.sha }}
+            REVISION=${{ steps.vars.outputs.revision }}
             CREATED=${{ steps.vars.outputs.created }}
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

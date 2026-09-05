@@ -2,10 +2,17 @@ name: PR title
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Release PR number to validate
+        required: true
+        type: string
 permissions:
   contents: read
+  pull-requests: read
 concurrency:
-  group: pr-title-${{ github.event.pull_request.number }}
+  group: pr-title-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 jobs:
   conventional:
@@ -14,7 +21,15 @@ jobs:
       - name: Validate Conventional Commit title
         env:
           TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            pr=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json title,headRefOid)
+            [[ "$(jq -r .headRefOid <<< "$pr")" == "$GITHUB_SHA" ]]
+            TITLE=$(jq -r .title <<< "$pr")
+          fi
           if ! printf '%s\n' "$TITLE" | grep -Eq '^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([a-z0-9._/-]+\))?!?: .+'; then
             echo 'PR title must be a supported Conventional Commit title.' >&2
             exit 1

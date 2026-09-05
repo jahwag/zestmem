@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.title="ZestMem" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
-      org.opencontainers.image.source="https://github.com/jahwag/zestmem" \
+      org.opencontainers.image.source="https://github.com/Bytelope/zestmem" \
       org.opencontainers.image.licenses="LicenseRef-Proprietary"
 COPY --from=build /out/memoryd /usr/local/bin/memoryd
 USER nonroot:nonroot
