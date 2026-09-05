@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/Bytelope/zestmem/compare/v0.10.0...v0.10.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* update backup packages and honor release scan severities ([#70](https://github.com/Bytelope/zestmem/issues/70)) ([632a775](https://github.com/Bytelope/zestmem/commit/632a77527046359a873553f6e7745fd9786bfdab))
+
 ## [0.10.0](https://github.com/Bytelope/zestmem/compare/v0.8.0...v0.10.0) (2026-09-05)
 
 
