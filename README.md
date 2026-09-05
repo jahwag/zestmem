@@ -31,7 +31,7 @@ podman compose pull
 podman compose up -d
 ```
 
-Run `podman compose run --rm memory --version`, then download the matching `memoryctl` from [ZestMem releases](https://github.com/jahwag/zestmem/releases) and follow [release verification](docs/verifying-releases.md).
+Run `podman compose run --rm memory --version`, then download the matching `memoryctl` from [ZestMem releases](https://github.com/Bytelope/zestmem/releases) and follow [release verification](docs/verifying-releases.md).
 
 Compose binds the memory API to `127.0.0.1:8080` and PostgreSQL administration to `127.0.0.1:15432`. Bootstrap the first operator and organization using the password from `.env`:
 
