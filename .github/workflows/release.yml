@@ -23,7 +23,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$GITHUB_REPOSITORY" == "Bytelope/zestmem" ]]
+          [[ "$GITHUB_REPOSITORY" == "jahwag/zestmem" ]]
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then error("release is a draft") else . end'
@@ -152,7 +152,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.RELEASE_TAG }}
-          IMAGE: ghcr.io/bytelope/${{ matrix.image }}
+          IMAGE: ghcr.io/jahwag/${{ matrix.image }}
         run: |
           version="${TAG#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"

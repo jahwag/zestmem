@@ -20,13 +20,11 @@ A Memory `use_when` is a one-line, body-supported routing hint describing concre
 
 ## Quick start
 
-The included Compose file runs ZestMem `0.10.1` from the canonical private
-`ghcr.io/bytelope/` packages. It requires Podman Compose or Docker Compose and
-registry access for your GitHub account. Log in with a GitHub personal access
-token that has `read:packages` and access to these packages.
+The included Compose file runs the ZestMem release pinned in `compose.yaml`
+from the public `ghcr.io/jahwag/` packages. It requires Podman Compose or
+Docker Compose.
 
 ```sh
-podman login ghcr.io
 cp .env.example .env
 chmod 600 .env
 # Set a long random POSTGRES_PASSWORD and MEMORY_DOMAIN=localhost.
@@ -35,7 +33,7 @@ podman compose pull
 podman compose up -d
 ```
 
-Run `podman compose run --rm memory --version`, then download the matching `memoryctl` from [ZestMem releases](https://github.com/Bytelope/zestmem/releases) and follow [release verification](docs/verifying-releases.md).
+Run `podman compose run --rm memory --version`, then download the matching `memoryctl` from [ZestMem releases](https://github.com/jahwag/zestmem/releases) and follow [release verification](docs/verifying-releases.md).
 
 Compose binds the memory API to `127.0.0.1:8080` and PostgreSQL administration to `127.0.0.1:15432`. Bootstrap the first operator and organization using the password from `.env`:
 
