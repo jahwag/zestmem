@@ -11,7 +11,7 @@ import (
 )
 
 func TestRenderPublishesOnlyExactApprovedCueAndInvalidatesEdits(t *testing.T) {
-	cue := "Work involving consultant.dev architecture, deployments, or agent-working conventions."
+	cue := "Work involving example.com architecture, deployments, or agent-working conventions."
 	catalog := memory.CatalogResult{Spaces: []memory.CatalogEntry{{SpaceID: "00000000-0000-0000-0000-000000000001", Name: "Team", Slug: "team", Type: "project", UseWhen: cue}}}
 	approved := Approvals{catalog.Spaces[0].SpaceID: CueHash(cue)}
 	out, err := Render(catalog, approved)

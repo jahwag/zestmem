@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Build a self-hosted shared memory service for small autonomous agent teams such as Clem. It must:
+Build a self-hosted shared memory service for small autonomous agent teams. It must:
 
 - Work over MCP from Codex, Claude Code, and OpenCode.
 - Store only explicit, opt-in Memory writes—never transcripts or automatic conversation summaries.
@@ -76,7 +76,7 @@ Lifecycle storage supports active, retracted, corrected, superseded, expired, an
   - One high-entropy key authenticates one Agent Principal.
   - Store only a secure digest and prefix; support immediate revocation.
   - Do not build expiry alerting, overlapping-key ceremonies, or a general secrets-management subsystem in M1.
-  - Clem may keep the key in agent-vault and inject it only for the memory-service HTTPS host.
+  - An agent may keep the key in a secret store and inject it only for the memory-service HTTPS host.
 - Provide an operator CLI/seed workflow—there is no hidden dependency on the M2 console—to:
   - Bootstrap the first Owner.
   - Create Spaces and Workspace Bindings.
@@ -130,7 +130,7 @@ Package coordinates, monorepo detectors, and ecosystem-specific metadata are def
 
 Use BAAI/bge-small-en-v1.5 as the initial English embedding model through one shared TEI process. Persist provider, immutable model revision, dimensions, normalization, and query/document prefixes. Mixed active fingerprints are prohibited; controlled re-embedding enables later model replacement. Use exact vector search until traces demonstrate an ANN requirement.
 
-Promote HNSW only after exact search is isolated as the bottleneck: either two consecutive cdev-class benchmark runs with 10,000 active embeddings in the queried Space show database-backed recall p95 above 250 ms, or production recall p95 remains above 500 ms for 15 minutes and tracing attributes at least half of that latency to the PostgreSQL vector scan. Record corpus size, `EXPLAIN (ANALYZE, BUFFERS)`, recall-quality comparison, and rollback evidence before enabling the index.
+Promote HNSW only after exact search is isolated as the bottleneck: either two consecutive reference-host benchmark runs with 10,000 active embeddings in the queried Space show database-backed recall p95 above 250 ms, or production recall p95 remains above 500 ms for 15 minutes and tracing attributes at least half of that latency to the PostgreSQL vector scan. Record corpus size, `EXPLAIN (ANALYZE, BUFFERS)`, recall-quality comparison, and rollback evidence before enabling the index.
 
 ### M1.3 Client delivery and operations
 
@@ -149,7 +149,7 @@ Promote HNSW only after exact search is isolated as the bottleneck: either two c
 
 ### M1 acceptance
 
-- Ten concurrent agents and 10,000 Memories operate on the cdev-class 8-vCPU/15-GiB host without authorization leakage or unbounded TEI queues.
+- Ten concurrent agents and 10,000 Memories operate on an 8-vCPU/15-GiB reference host without authorization leakage or unbounded TEI queues.
 - Catalog/recall/body token invariants are executable tests.
 - Duplicate exact writes, near-duplicate advisories, deliberate distinct writes, idempotent retries, revision conflicts, and retraction exclusion are tested.
 - Cross-Space reads/writes, read-only inheritance, private-Space isolation, disabled Principals, wrong audiences, expired JWTs, revoked fallback keys, and rate limiting are tested.
@@ -196,6 +196,6 @@ Promotion criteria must be written before moving an item forward—for example, 
 
 ## Mem0 Position
 
-Mem0 remains comparative prior art, not the implementation base. Its MCP transport and semantic memory demonstrate demand, but its project/API-key authorization, caller-selected entity partitions, automatic capture patterns, and lack of this system's explicit revision, Space, provenance, and context-budget contracts do not satisfy the consultant.dev/Clem requirements.
+Mem0 remains comparative prior art, not the implementation base. Its MCP transport and semantic memory demonstrate demand, but its project/API-key authorization, caller-selected entity partitions, automatic capture patterns, and lack of this system's explicit revision, Space, provenance, and context-budget contracts do not satisfy these requirements.
 
 Run identical golden queries against Mem0 and this service after M1. Compare duplicate pollution, irrelevant context, authorization isolation, and operator effort using evidence rather than feature counts.

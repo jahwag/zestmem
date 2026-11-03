@@ -19,26 +19,19 @@ keyless signatures always identify the exact release tag.
 
 ## Canonical repository and version continuity
 
-`Bytelope/zestmem` is the source of truth for source, GitHub releases, and new
-container images (`ghcr.io/bytelope/zestmem` and `ghcr.io/bytelope/zestmem-backup`).
-Both the repository and these packages are private; consumers need the relevant
-GitHub and registry access. The Go module path remains
-`github.com/jahwag/zestmem` as an internal build/import identifier, not a source
-or release-download location.
+`jahwag/zestmem` is the source of truth for source, GitHub releases, and
+container images (`ghcr.io/jahwag/zestmem` and `ghcr.io/jahwag/zestmem-backup`).
+The Go module path is `github.com/jahwag/zestmem`.
 
-The deleted public repository published different code as `v0.9.0`. That
-version remains reserved. Canonical native downloads resumed at `v0.10.0`.
-The backup image scan blocked that container release; `v0.10.1` updates the
-backup base packages and fixes SARIF severity filtering. Do not create or
-move a `v0.9.0` tag in this repository, or reuse its image tags for different
-code. Keep the existing release notes and tags as historical evidence.
+An earlier public distribution published different code as `v0.9.0`. That
+version remains reserved; do not create or move a `v0.9.0` tag, or reuse its
+image tags for different code. Releases `v0.10.0` and `v0.10.1` were built
+while the repository was temporarily private; their native archives remain
+attached to their releases. Keep existing release notes and tags as historical
+evidence.
 
-The public `ghcr.io/jahwag/` images are retained for existing installations,
-including cdev backup jobs. New release workflows never overwrite those
-images. `compose.yaml` uses the canonical `0.10.1` images for new installations,
-which require registry authentication. Existing cdev deployments and backup
-jobs retain their separately pinned legacy digests; changing those running
-services remains a deployment migration.
+Release Please bumps the image versions pinned in `compose.yaml` together with
+the release, so the Compose quick start always matches the latest release.
 
 ## Failure and retry
 

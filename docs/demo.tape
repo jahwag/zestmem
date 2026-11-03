@@ -37,6 +37,6 @@ Type "until curl -fsS http://127.0.0.1:8080/readyz >/dev/null; do sleep 1; done;
 Enter
 Sleep 4s
 
-Type "echo; echo '  Agents reconnect. Their shared memory remains.'; echo '  github.com/Bytelope/zestmem'; echo"
+Type "echo; echo '  Agents reconnect. Their shared memory remains.'; echo '  github.com/jahwag/zestmem'; echo"
 Enter
 Sleep 5s
