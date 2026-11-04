@@ -21,6 +21,11 @@ updates:
     schedule: { interval: weekly }
     groups:
       container-bases: { patterns: ["*"] }
+    ignore:
+      # Go 1.27 ships Unicode 17; stay on 1.26 until a migration refreshes
+      # zestmem_use_when_is_safe (see migrations/integration_test.go).
+      - dependency-name: library/golang
+        versions: [">= 1.27"]
     commit-message: { prefix: "build(deps)" }
     cooldown:
       default-days: 7
