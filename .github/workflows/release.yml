@@ -178,15 +178,17 @@ jobs:
             VERSION=${{ steps.vars.outputs.version }}
             REVISION=${{ steps.vars.outputs.revision }}
             CREATED=${{ steps.vars.outputs.created }}
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: '${{ steps.vars.outputs.image }}@${{ steps.build.outputs.digest }}'
-          format: sarif
-          output: trivy-image.sarif
-          severity: HIGH,CRITICAL
-          limit-severities-for-sarif: true
-          ignore-unfixed: true
-          exit-code: '1'
+      # Pinned Trivy image: trivy-action installs from get.trivy.dev, which
+      # stopped resolving in November 2026.
+      - name: Scan image for vulnerabilities
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.vars.outputs.image }}
+        run: >-
+          docker run --rm -v "$PWD:/work" -w /work
+          ghcr.io/aquasecurity/trivy:0.70.0@sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e
+          image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          --format sarif --output trivy-image.sarif "${IMAGE}@${DIGEST}"
       - name: Preserve image vulnerability report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
