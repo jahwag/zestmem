@@ -19,14 +19,14 @@ jobs:
         with: { go-version: '1.26.10', cache: true }
       - run: go mod verify
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -json ./... > govulncheck.json
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs.sarif
-          severity: HIGH,CRITICAL
-          exit-code: '1'
+      # Pinned Trivy image: trivy-action installs from get.trivy.dev, which
+      # stopped resolving in November 2026.
+      - name: Scan repository for vulnerabilities
+        run: >-
+          docker run --rm -v "$PWD:/work" -w /work
+          ghcr.io/aquasecurity/trivy:0.70.0@sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e
+          fs --severity HIGH,CRITICAL --exit-code 1
+          --format sarif --output trivy-fs.sarif .
       - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
           advanced-security: false
