@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.3](https://github.com/jahwag/zestmem/compare/v0.10.2...v0.10.3) (2026-11-04)
+
+
+### Bug Fixes
+
+* **build:** label container images as MIT ([#84](https://github.com/jahwag/zestmem/issues/84)) ([1ed807f](https://github.com/jahwag/zestmem/commit/1ed807f3ade375cff4b28cc7121959e72c1c2d01))
+* **ci:** run Trivy from its pinned container image ([#86](https://github.com/jahwag/zestmem/issues/86)) ([e893fb4](https://github.com/jahwag/zestmem/commit/e893fb4a12c895e06623e211751e38d32b9d9322))
+
 ## [0.10.2](https://github.com/jahwag/zestmem/compare/v0.10.1...v0.10.2) (2026-11-04)
 
 
