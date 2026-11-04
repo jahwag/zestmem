@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/jahwag/zestmem/compare/v0.10.1...v0.10.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **deps:** patch go-jose, x/net and Go stdlib vulnerabilities ([#81](https://github.com/jahwag/zestmem/issues/81)) ([dee0aac](https://github.com/jahwag/zestmem/commit/dee0aac64df16692c1c290dcff88514600cccee9))
+
 ## [0.10.1](https://github.com/jahwag/zestmem/compare/v0.10.0...v0.10.1) (2026-09-05)
 
 
