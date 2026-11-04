@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.title="ZestMem" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.source="https://github.com/jahwag/zestmem" \
-      org.opencontainers.image.licenses="LicenseRef-Proprietary"
+      org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/memoryd /usr/local/bin/memoryd
 USER nonroot:nonroot
 EXPOSE 8080
