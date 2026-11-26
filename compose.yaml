@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: docker.io/pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f # pg17
+    image: docker.io/pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd # pg17
     environment:
       POSTGRES_DB: memory
       POSTGRES_USER: memory
@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
 
   tei:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d # cpu-1.8
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.10@sha256:f0a4bb206b9d4877746b5b9f638e138fe683eeb9787c14d541a12c993b562d86 # cpu-1.8
     command:
       - --model-id
       - BAAI/bge-small-en-v1.5
@@ -72,7 +72,7 @@ services:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
   caddy:
-    image: docker.io/library/caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9 # 2.10.2-alpine
+    image: docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 # 2.10.2-alpine
     environment:
       MEMORY_DOMAIN: ${MEMORY_DOMAIN:-localhost}
     ports:
